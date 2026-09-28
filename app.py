@@ -577,10 +577,32 @@ async def generate_ppt(request: Request):
                 "recordDesc": record_desc,
                 "images": images,
                 "notesMap": notes_map,
+                "slides": slides,
             },
         }
     except Exception as e:  # noqa: BLE001
         logger.exception("generate_ppt error")
+        return {"code": "9999", "msg": str(e)}
+
+
+@app.post("/regenerate_ppt")
+async def regenerate_ppt(request: Request):
+    """按前端 fabric 画布 JSON 重新生成 .pptx（不调 LLM）。"""
+    body = await request.json()
+    title = body.get("title", "")
+    theme = ppt.get_template(body.get("pptId") or body.get("templateId"))
+    slides_elements = body.get("slides") or []
+    try:
+        pptx_bytes = ppt.build_pptx_from_elements(slides_elements, theme)
+        ppt_id = str(int(time.time() * 1000))
+        ppt_key = f"copywriting/{ppt_id}/{ppt_id}.pptx"
+        minio_util.upload_bytes(
+            ppt_key, pptx_bytes,
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        return {"code": "0000", "data": {"pptUrl": ppt_key, "recordDesc": f"{title or '课件'}.pptx"}}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("regenerate_ppt error")
         return {"code": "9999", "msg": str(e)}
 
 

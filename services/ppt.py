@@ -8,6 +8,7 @@ import io
 import json
 import os
 import re
+import urllib.request
 
 from PIL import Image, ImageDraw, ImageFont
 from pptx import Presentation
@@ -406,3 +407,96 @@ def _render_footer(draw, theme, width, height, index, total):
     font = _load_font(18)
     text = f"{index} / {total}    {theme['name']}"
     draw.text((width - 40, height - 36), text, font=font, fill=theme["footer_color"], anchor="rm")
+
+
+# ============ fabric 画布 JSON -> .pptx ============
+
+_PX2EMU = 9525  # 1px = 9525 EMU（1280px 对应 13.333 英寸）
+
+
+def _hex_to_rgb(h):
+    h = (h or "#ffffff").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return (255, 255, 255)
+
+
+def build_pptx_from_elements(slides_elements, theme=None) -> bytes:
+    """根据前端 fabric 画布 JSON（每页元素）生成 .pptx。"""
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank = prs.slide_layouts[6]
+
+    for raw in slides_elements:
+        data = raw
+        if isinstance(raw, str):
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+        slide = prs.slides.add_slide(blank)
+        for obj in (data or {}).get("objects", []):
+            otype = obj.get("type")
+            if otype == "rect" and obj.get("id") == "ppt-bg":
+                slide.background.fill.solid()
+                slide.background.fill.fore_color.rgb = RGBColor(*_hex_to_rgb(obj.get("fill")))
+            elif otype == "textbox":
+                _add_textbox_shape(slide, obj)
+            elif otype == "image":
+                _add_image_shape(slide, obj)
+
+    buf = io.BytesIO()
+    prs.save(buf)
+    return buf.getvalue()
+
+
+def _add_textbox_shape(slide, obj):
+    left = int(obj.get("left", 0) * _PX2EMU)
+    top = int(obj.get("top", 0) * _PX2EMU)
+    width = int((obj.get("width", 300) or 0) * (obj.get("scaleX", 1) or 1) * _PX2EMU)
+    height = int((obj.get("height", 100) or 0) * (obj.get("scaleY", 1) or 1) * _PX2EMU)
+    width = max(width, _PX2EMU)
+    height = max(height, _PX2EMU)
+    tb = slide.shapes.add_textbox(left, top, width, height)
+    tf = tb.text_frame
+    tf.word_wrap = True
+    text = obj.get("text", "") or ""
+    lines = text.split("\n")
+    fs = int((obj.get("fontSize", 24) or 24) * 0.75)
+    color = _hex_to_rgb(obj.get("fill"))
+    bold = obj.get("fontWeight") == "bold"
+    for i, line in enumerate(lines):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        run = p.add_run()
+        run.text = line
+        run.font.size = Pt(fs)
+        run.font.color.rgb = RGBColor(*color)
+        run.font.bold = bold
+
+
+def _add_image_shape(slide, obj):
+    src = obj.get("src", "")
+    if not src:
+        return
+    if src.startswith("data:image"):
+        data = base64.b64decode(src.split(",", 1)[1])
+    else:
+        try:
+            data = urllib.request.urlopen(src, timeout=15).read()
+        except Exception:
+            return
+    left = int(obj.get("left", 0) * _PX2EMU)
+    top = int(obj.get("top", 0) * _PX2EMU)
+    width = int((obj.get("width", 100) or 0) * (obj.get("scaleX", 1) or 1) * _PX2EMU)
+    height = int((obj.get("height", 100) or 0) * (obj.get("scaleY", 1) or 1) * _PX2EMU)
+    if width <= 0 or height <= 0:
+        return
+    try:
+        slide.shapes.add_picture(io.BytesIO(data), left, top, width, height)
+    except Exception:
+        return
+
