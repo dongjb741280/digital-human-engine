@@ -500,8 +500,8 @@ async def make_ppt_voice2video(request: Request):
 
 @app.get("/getppt")
 async def get_ppt():
-    """模板查询（桩）：返回空模板列表。真实实现接文案 LLM/agent 服务。"""
-    return {"code": "0000", "data": []}
+    """模板查询：返回内置主题模板列表（含缩略图）。"""
+    return {"code": "0000", "data": ppt.list_templates()}
 
 
 @app.post("/generate_outline")
@@ -550,9 +550,10 @@ async def generate_ppt(request: Request):
     body = await request.json()
     title = body.get("title", "")
     text = body.get("text") or body.get("content", "")
+    theme = ppt.get_template(body.get("pptId") or body.get("templateId"))
     try:
         slides = ppt.generate_slides(title, text, system=body.get("agentRole"))
-        pptx_bytes = ppt.build_pptx(slides)
+        pptx_bytes = ppt.build_pptx(slides, theme)
         ppt_id = str(int(time.time() * 1000))
         record_desc = f"{title or '课件'}.pptx"
         ppt_key = f"copywriting/{ppt_id}/{ppt_id}.pptx"
@@ -562,8 +563,9 @@ async def generate_ppt(request: Request):
         )
         images = []
         notes_map = {}
+        total = len(slides)
         for i, s in enumerate(slides):
-            png_bytes = ppt.render_slide(s.get("title", ""), s.get("bullets", []))
+            png_bytes = ppt.render_slide(s, theme, i, total)
             img_key = f"copywriting/{ppt_id}/slides/{ppt_id}_{i}.png"
             minio_util.upload_bytes(img_key, png_bytes, "image/png")
             images.append(f"{config.MINIO_ENDPOINT}/{config.MINIO_BUCKET}/{img_key}")
