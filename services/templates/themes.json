@@ -8,6 +8,7 @@
     "footer_color": [119, 132, 149],
     "cover_bg": [241, 111, 151],
     "title_image": "mode1/title.png",
+    "mode": "mode1/mode.json",
     "backgrounds": [
       "mode1/img/图片1.png",
       "mode1/img/图片2.png",
@@ -23,6 +24,7 @@
     "footer_color": [119, 132, 149],
     "cover_bg": [40, 90, 140],
     "title_image": "mode2/title.png",
+    "mode": "mode2/mode.json",
     "backgrounds": [
       "mode2/img/图片1.png",
       "mode2/img/图片2.png",

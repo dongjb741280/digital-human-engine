@@ -27,7 +27,7 @@ _FONT_NAME = "微软雅黑"
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
 def _load_themes():
-    """从 templates/themes.json 加载主题配置（配色唯一事实源），颜色转 tuple。"""
+    """从 templates/themes.json 加载主题配置，颜色转 tuple，并加载 mode.json 版式参数。"""
     path = os.path.join(_TEMPLATE_DIR, "themes.json")
     with open(path, "r", encoding="utf-8") as f:
         raw = json.load(f)
@@ -36,6 +36,16 @@ def _load_themes():
         t = dict(t)
         for key in ("accent", "title_color", "body_color", "footer_color", "cover_bg"):
             t[key] = tuple(t[key])
+        mode_file = t.get("mode")
+        if mode_file:
+            mode_path = os.path.join(_TEMPLATE_DIR, mode_file)
+            try:
+                with open(mode_path, "r", encoding="utf-8") as mf:
+                    t["mode"] = json.load(mf)
+            except Exception:
+                t["mode"] = {}
+        else:
+            t["mode"] = {}
         themes.append(t)
     return themes
 
@@ -73,6 +83,47 @@ def _title_image_path(theme):
         return None
     path = os.path.join(_TEMPLATE_DIR, name)
     return path if os.path.exists(path) else None
+
+
+def _cm2in(cm):
+    return cm / 2.54
+
+
+def _mode_box(theme, page_type, element):
+    """从 mode.json 取某页型某元素的 (left, top, width, height)，单位英寸；缺失返回 None。"""
+    info = theme.get("mode", {}).get(page_type, {}).get(element)
+    if not info:
+        return None
+    return (
+        _cm2in(info.get("pos_x", 0)),
+        _cm2in(info.get("pos_y", 0)),
+        _cm2in(info.get("width", 0)),
+        _cm2in(info.get("height", 0)),
+    )
+
+
+def _mode_font(theme, page_type, element, default=18):
+    """从 mode.json 取某页型某元素字号，缺失返回 default。"""
+    info = theme.get("mode", {}).get(page_type, {}).get(element, {})
+    return info.get("font_size", default)
+
+
+def _slide_size(theme):
+    """从 mode.json 取幻灯片尺寸 (width_in, height_in)，缺失回退 16:9 13.333x7.5。"""
+    size = theme.get("mode", {}).get("slide_size", {})
+    w, h = size.get("width"), size.get("height")
+    if w and h:
+        return _cm2in(w), _cm2in(h)
+    return 13.333, 7.5
+
+
+def _add_page_background(slide, theme, prs):
+    """给内容页铺随机背景图；无图时用白底。"""
+    bg = _bg_path(theme)
+    if bg:
+        slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
+    else:
+        _set_bg(slide, (255, 255, 255))
 
 
 def _fit(img: Image.Image, width: int, height: int) -> Image.Image:
@@ -229,8 +280,9 @@ def build_pptx(slides, theme=None) -> bytes:
     """根据幻灯片内容（9 版式）+ 主题生成 .pptx 字节。"""
     theme = theme or THEMES[0]
     prs = Presentation()
-    prs.slide_width = Inches(13.333)
-    prs.slide_height = Inches(7.5)
+    slide_w, slide_h = _slide_size(theme)
+    prs.slide_width = Inches(slide_w)
+    prs.slide_height = Inches(slide_h)
     blank = prs.slide_layouts[6]
     total = len(slides)
     for i, item in enumerate(slides):
@@ -264,14 +316,6 @@ def _set_bg(slide, color):
     slide.background.fill.fore_color.rgb = RGBColor(*color)
 
 
-def _add_accent_bar(slide, theme, x=0.6, y=0.55, w=0.12, h=0.8):
-    bar = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
-    bar.fill.solid()
-    bar.fill.fore_color.rgb = RGBColor(*theme["accent"])
-    bar.line.fill.background()
-    return bar
-
-
 def _add_textbox(slide, x, y, w, h, text, theme, size=18, color=None, bold=False, align=PP_ALIGN.LEFT):
     tb = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
     tf = tb.text_frame
@@ -303,20 +347,10 @@ def _add_bullets(slide, x, y, w, h, bullets, theme, size=18):
     return tb
 
 
-def _add_title(slide, title, theme, x=0.9, y=0.5, w=11.6, h=0.9, size=28):
-    _add_textbox(slide, x, y, w, h, title, theme, size=size, color=theme["title_color"], bold=True)
-
-
-def _add_divider(slide, x=0.9, y=1.5, w=11.6):
-    line = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Pt(1.5))
-    line.fill.solid()
-    line.fill.fore_color.rgb = RGBColor(220, 224, 230)
-    line.line.fill.background()
-    return line
-
-
-def _add_footer(slide, theme, index, total):
-    _add_textbox(slide, 0.9, 6.9, 11.6, 0.4, f"{index + 1} / {total}    {theme['name']}",
+def _add_footer(slide, theme, index, total, prs):
+    sw = prs.slide_width / 914400.0
+    sh = prs.slide_height / 914400.0
+    _add_textbox(slide, sw - 2.5, sh - 0.5, 2.3, 0.4, f"{index + 1} / {total}",
                  theme, size=10, color=theme["footer_color"], align=PP_ALIGN.RIGHT)
 
 
@@ -326,117 +360,124 @@ def _style_cover(slide, item, theme, index, total, prs):
         slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
     else:
         _set_bg(slide, theme["cover_bg"])
-    _add_accent_bar(slide, theme, x=1, y=2.9, w=0.08, h=1.6)
-    _add_textbox(slide, 1.3, 2.7, 10.5, 1.5, str(item.get("title", "")), theme, size=42, color=(255, 255, 255), bold=True)
-    subtitle = str(item.get("subtitle", "") or f"{theme['name']} · AI 生成")
-    _add_textbox(slide, 1.32, 4.35, 10, 0.5, subtitle, theme, size=18, color=(240, 240, 240))
+    box = _mode_box(theme, "first_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "")), theme,
+                     size=_mode_font(theme, "first_page", "title_info", 36), color=(255, 255, 255), bold=True)
 
 
 def _style_agenda(slide, item, theme, index, total, prs):
-    _set_bg(slide, (255, 255, 255))
-    _add_accent_bar(slide, theme)
-    _add_title(slide, "目录", theme)
-    _add_divider(slide)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "catalog_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, "目录", theme,
+                     size=_mode_font(theme, "catalog_page", "title_info", 40), color=theme["title_color"], bold=True)
+    tx = box[0] if box else 0.5
+    ty = (box[1] + box[3] + 0.5) if box else 1.5
     for j, it in enumerate(item.get("items", []) or []):
-        _add_textbox(slide, 1.2, 1.7 + j * 0.8, 10.8, 0.7, f"{j + 1}. {it}", theme, size=20)
-    _add_footer(slide, theme, index, total)
+        _add_textbox(slide, tx, ty + j * 0.7, 8, 0.6, f"{j + 1}. {it}", theme, size=20, color=theme["body_color"])
+    _add_footer(slide, theme, index, total, prs)
 
 
 def _style_section(slide, item, theme, index, total, prs):
-    bg = _bg_path(theme)
-    if bg:
-        slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
-    else:
-        _set_bg(slide, theme["accent"])
-    _add_accent_bar(slide, theme, x=1, y=3.2, w=0.08, h=1.0)
-    _add_textbox(slide, 1.4, 3.1, 10, 1.2, str(item.get("title", "")), theme, size=36, color=(255, 255, 255), bold=True)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "first_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "")), theme,
+                     size=_mode_font(theme, "first_page", "title_info", 36), color=(255, 255, 255), bold=True)
 
 
 def _style_content(slide, item, theme, index, total, prs):
-    _set_bg(slide, (255, 255, 255))
-    _add_accent_bar(slide, theme)
-    _add_title(slide, item.get("title", ""), theme)
-    _add_divider(slide)
-    _add_bullets(slide, 0.9, 1.8, 11.6, 4.9, [str(b) for b in item.get("bullets", [])], theme)
-    _add_footer(slide, theme, index, total)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "main_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "")), theme,
+                     size=_mode_font(theme, "main_page", "title_info", 28), color=theme["title_color"], bold=True)
+    box = _mode_box(theme, "main_page", "content_info")
+    if box:
+        _add_bullets(slide, *box, [str(b) for b in item.get("bullets", [])], theme,
+                     size=_mode_font(theme, "main_page", "content_info", 18))
+    _add_footer(slide, theme, index, total, prs)
 
 
 def _style_image_text(slide, item, theme, index, total, prs):
-    _set_bg(slide, (255, 255, 255))
-    _add_accent_bar(slide, theme)
-    _add_title(slide, item.get("title", ""), theme)
-    side = item.get("image_side") or "left"
-    text_x = 6.0 if side == "left" else 0.9
-    _add_bullets(slide, text_x, 1.8, 5.5, 4.9, [str(b) for b in item.get("bullets", [])], theme)
-    img_x = 0.9 if side == "left" else 6.3
-    data = _resolve_slide_image(item, "image_text")
-    if data is None:
-        _add_image_placeholder(slide, img_x, 1.8, 5.2, 4.9)
-    else:
-        try:
-            slide.shapes.add_picture(io.BytesIO(data), Inches(img_x), Inches(1.8), Inches(5.2), Inches(4.9))
-        except Exception:
-            _add_image_placeholder(slide, img_x, 1.8, 5.2, 4.9)
-    _add_footer(slide, theme, index, total)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "main_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "")), theme,
+                     size=_mode_font(theme, "main_page", "title_info", 28), color=theme["title_color"], bold=True)
+    img_box = _mode_box(theme, "main_page", "img_info")
+    content_box = _mode_box(theme, "main_page", "content_info")
+    if content_box:
+        _add_bullets(slide, *content_box, [str(b) for b in item.get("bullets", [])], theme,
+                     size=_mode_font(theme, "main_page", "content_info", 18))
+    if img_box:
+        data = _resolve_slide_image(item, "image_text")
+        if data is None:
+            _add_image_placeholder(slide, *img_box)
+        else:
+            try:
+                slide.shapes.add_picture(io.BytesIO(data), Inches(img_box[0]), Inches(img_box[1]),
+                                         Inches(img_box[2]), Inches(img_box[3]))
+            except Exception:
+                _add_image_placeholder(slide, *img_box)
+    _add_footer(slide, theme, index, total, prs)
 
 
 def _style_full_image(slide, item, theme, index, total, prs):
     data = _resolve_slide_image(item, "full_image")
     if data is None:
-        bg = _bg_path(theme)
-        if bg:
-            slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
-        else:
-            _set_bg(slide, theme["accent"])
+        _add_page_background(slide, theme, prs)
     else:
         try:
             slide.shapes.add_picture(io.BytesIO(data), 0, 0, width=prs.slide_width, height=prs.slide_height)
         except Exception:
-            _set_bg(slide, theme["accent"])
-    _add_textbox(slide, 0.9, 3.0, 11.6, 1.4, str(item.get("title", "")), theme, size=40, color=(255, 255, 255), bold=True)
-    _add_footer(slide, theme, index, total)
+            _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "main_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "")), theme,
+                     size=_mode_font(theme, "main_page", "title_info", 28), color=(255, 255, 255), bold=True)
+    _add_footer(slide, theme, index, total, prs)
 
 
 def _style_quote(slide, item, theme, index, total, prs):
-    data = _resolve_slide_image(item, "quote")
-    if data is not None:
-        try:
-            slide.shapes.add_picture(io.BytesIO(data), 0, 0, width=prs.slide_width, height=prs.slide_height)
-        except Exception:
-            data = None
-    if data is None:
-        _set_bg(slide, (255, 255, 255))
-    on_image = data is not None
-    _add_accent_bar(slide, theme, x=0.6, y=2.4, w=0.12, h=1.6)
-    _add_textbox(slide, 1.0, 2.2, 11.0, 2.0, str(item.get("text", "")), theme, size=28,
-                 color=(255, 255, 255) if on_image else theme["title_color"], bold=True)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "main_page", "content_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("text", "")), theme,
+                     size=_mode_font(theme, "main_page", "content_info", 28), color=theme["title_color"], bold=True)
     source = item.get("source")
     if source:
-        _add_textbox(slide, 1.0, 4.6, 11.0, 0.6, "—— " + str(source), theme, size=16,
-                     color=(240, 240, 240) if on_image else theme["footer_color"])
-    _add_footer(slide, theme, index, total)
+        tx = box[0] if box else 0.5
+        ty = (box[1] + box[3] + 0.3) if box else 4.0
+        _add_textbox(slide, tx, ty, 8, 0.5, "—— " + str(source), theme, size=16, color=theme["footer_color"])
+    _add_footer(slide, theme, index, total, prs)
 
 
 def _style_comparison(slide, item, theme, index, total, prs):
-    _set_bg(slide, (255, 255, 255))
-    _add_accent_bar(slide, theme)
-    _add_title(slide, item.get("title", ""), theme)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "main_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "")), theme,
+                     size=_mode_font(theme, "main_page", "title_info", 28), color=theme["title_color"], bold=True)
     left = item.get("left") or {}
     right = item.get("right") or {}
-    _add_textbox(slide, 0.9, 1.7, 5.5, 0.7, str(left.get("title", "")), theme, size=22, color=theme["title_color"], bold=True)
-    _add_bullets(slide, 0.9, 2.5, 5.5, 4.0, [str(p) for p in left.get("points", [])], theme, size=16)
-    _add_textbox(slide, 6.6, 1.7, 5.5, 0.7, str(right.get("title", "")), theme, size=22, color=theme["title_color"], bold=True)
-    _add_bullets(slide, 6.6, 2.5, 5.5, 4.0, [str(p) for p in right.get("points", [])], theme, size=16)
-    _add_footer(slide, theme, index, total)
+    cb = _mode_box(theme, "main_page", "content_info")
+    if cb:
+        half = cb[2] / 2
+        _add_textbox(slide, cb[0], cb[1], half, 0.6, str(left.get("title", "")), theme, size=22, color=theme["title_color"], bold=True)
+        _add_bullets(slide, cb[0], cb[1] + 0.7, half, cb[3] - 0.7, [str(p) for p in left.get("points", [])], theme, size=16)
+        _add_textbox(slide, cb[0] + half, cb[1], half, 0.6, str(right.get("title", "")), theme, size=22, color=theme["title_color"], bold=True)
+        _add_bullets(slide, cb[0] + half, cb[1] + 0.7, half, cb[3] - 0.7, [str(p) for p in right.get("points", [])], theme, size=16)
+    _add_footer(slide, theme, index, total, prs)
 
 
 def _style_closing(slide, item, theme, index, total, prs):
-    bg = _bg_path(theme)
-    if bg:
-        slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
-    else:
-        _set_bg(slide, theme["cover_bg"])
-    _add_textbox(slide, 0.9, 3.0, 11.6, 1.4, str(item.get("title", "") or "谢谢/总结"), theme, size=40, color=(255, 255, 255), bold=True)
+    _add_page_background(slide, theme, prs)
+    box = _mode_box(theme, "first_page", "title_info")
+    if box:
+        _add_textbox(slide, *box, str(item.get("title", "") or "谢谢/总结"), theme,
+                     size=_mode_font(theme, "first_page", "title_info", 36), color=(255, 255, 255), bold=True)
 
 
 # ============ fabric 画布 JSON -> .pptx ============
