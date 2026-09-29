@@ -1,42 +1,32 @@
 [
   {
     "id": "0",
-    "name": "课程学习汇报",
+    "name": "图文模版",
     "accent": [241, 111, 151],
     "title_color": [190, 60, 100],
     "body_color": [47, 47, 47],
     "footer_color": [119, 132, 149],
     "cover_bg": [241, 111, 151],
-    "bg": "bg_0.jpg"
+    "title_image": "mode1/title.png",
+    "backgrounds": [
+      "mode1/img/图片1.png",
+      "mode1/img/图片2.png",
+      "mode1/img/图片3.png"
+    ]
   },
   {
     "id": "1",
-    "name": "读书分享演示",
-    "accent": [160, 182, 73],
-    "title_color": [110, 130, 40],
-    "body_color": [47, 47, 47],
-    "footer_color": [119, 132, 149],
-    "cover_bg": [160, 182, 73],
-    "bg": "bg_1.jpg"
-  },
-  {
-    "id": "2",
-    "name": "蓝色通用商务",
+    "name": "文本模版",
     "accent": [90, 170, 210],
     "title_color": [40, 90, 140],
     "body_color": [47, 47, 47],
     "footer_color": [119, 132, 149],
     "cover_bg": [40, 90, 140],
-    "bg": "bg_2.jpg"
-  },
-  {
-    "id": "3",
-    "name": "蓝色工作汇报总结",
-    "accent": [19, 117, 252],
-    "title_color": [19, 117, 252],
-    "body_color": [47, 47, 47],
-    "footer_color": [119, 132, 149],
-    "cover_bg": [19, 117, 252],
-    "bg": "bg_3.jpg"
+    "title_image": "mode2/title.png",
+    "backgrounds": [
+      "mode2/img/图片1.png",
+      "mode2/img/图片2.png",
+      "mode2/img/图片3.png"
+    ]
   }
 ]

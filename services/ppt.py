@@ -7,10 +7,11 @@ import base64
 import io
 import json
 import os
+import random
 import re
 import urllib.request
 
-from PIL import Image, ImageDraw
+from PIL import Image
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
@@ -56,21 +57,22 @@ def _set_run_font(run):
 
 
 def _bg_path(theme):
-    name = theme.get("bg")
+    """返回内容页随机背景图路径；无 backgrounds 时回退 bg（兼容旧配置）。"""
+    backgrounds = theme.get("backgrounds")
+    name = random.choice(backgrounds) if backgrounds else theme.get("bg")
     if not name:
         return None
     path = os.path.join(_TEMPLATE_DIR, name)
     return path if os.path.exists(path) else None
 
 
-def _load_bg(theme):
-    path = _bg_path(theme)
-    if not path:
+def _title_image_path(theme):
+    """返回封面 title 图路径；无 title_image 时回退 bg。"""
+    name = theme.get("title_image") or theme.get("bg")
+    if not name:
         return None
-    try:
-        return Image.open(path).convert("RGB")
-    except Exception:
-        return None
+    path = os.path.join(_TEMPLATE_DIR, name)
+    return path if os.path.exists(path) else None
 
 
 def _fit(img: Image.Image, width: int, height: int) -> Image.Image:
@@ -209,21 +211,15 @@ def list_templates():
 
 
 def _render_thumbnail(theme, width: int = 320, height: int = 180) -> bytes:
-    """生成主题缩略图（迷你封面示意）。"""
-    bg = _load_bg(theme)
-    if bg is not None:
-        img = _fit(bg, width, height)
-        draw = ImageDraw.Draw(img)
-        # 标题占位 + 强调条
-        draw.rectangle([16, 70, 96, 76], fill=theme["accent"])
-        draw.rectangle([16, 92, 288, 112], fill=(255, 255, 255))
-        draw.rectangle([24, 132, 296, 138], fill=(255, 255, 255))
+    """生成主题缩略图（用封面 title 图）。"""
+    path = _title_image_path(theme)
+    if path:
+        try:
+            img = _fit(Image.open(path).convert("RGB"), width, height)
+        except Exception:
+            img = Image.new("RGB", (width, height), theme["cover_bg"])
     else:
         img = Image.new("RGB", (width, height), theme["cover_bg"])
-        draw = ImageDraw.Draw(img)
-        draw.rectangle([16, 70, 96, 76], fill=theme["accent"])
-        draw.rectangle([16, 92, 288, 112], fill=(255, 255, 255))
-        draw.rectangle([24, 132, 296, 138], fill=(255, 255, 255))
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -325,7 +321,7 @@ def _add_footer(slide, theme, index, total):
 
 
 def _style_cover(slide, item, theme, index, total, prs):
-    bg = _bg_path(theme)
+    bg = _title_image_path(theme)
     if bg:
         slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
     else:
