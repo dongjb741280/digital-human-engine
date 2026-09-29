@@ -184,7 +184,12 @@ def generate_slides(title: str, body_text: str, system=None):
         "请把下面的课件文案整理成 PPT 幻灯片内容，只输出一个 JSON 数组（不要输出代码块或任何解释文字）。\n"
         "每个元素是一个幻灯片对象，含 layout 字段及各版式专属字段。\n"
         + _LAYOUT_SCHEMA +
-        "规则：第一页用 cover，最后一页用 closing；正文内容页用 content，需要配图/强调用 image_text、full_image 或 quote，需要对比用 comparison。\n"
+        "排版规则：\n"
+        "1. 第一页用 cover，最后一页用 closing；中间可加 agenda 目录页、section 章节过渡页。\n"
+        "2. 正文内容页用 content；但整份 PPT 至少要有 2~3 页用 image_text（左图右文）或 full_image（全图）配图，"
+        "让画面更丰富。image 字段填 2~6 字的中文主题关键词（如「故宫雪景」「人工智能」，不要写整句话）。\n"
+        "3. 遇到金句/名言/结论，用 quote 金句页。\n"
+        "4. 需要左右对比时用 comparison。\n"
         "控制在 6~10 页。\n"
         f"标题：{title}\n"
         f"文案正文：\n{body_text}\n"
