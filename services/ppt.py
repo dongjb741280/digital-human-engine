@@ -408,11 +408,20 @@ def _style_image_text(slide, item, theme, index, total, prs):
                      size=_mode_font(theme, "main_page", "title_info", 28), color=theme["title_color"], bold=True)
     img_box = _mode_box(theme, "main_page", "img_info")
     content_box = _mode_box(theme, "main_page", "content_info")
+    data = _resolve_slide_image(item, "image_text")
     if content_box:
-        _add_bullets(slide, *content_box, [str(b) for b in item.get("bullets", [])], theme,
-                     size=_mode_font(theme, "main_page", "content_info", 18))
+        if img_box:
+            # 模版有 img_info：图放 img_box，文字放 content_box
+            _add_bullets(slide, *content_box, [str(b) for b in item.get("bullets", [])], theme,
+                         size=_mode_font(theme, "main_page", "content_info", 18))
+        else:
+            # 模版无 img_info：图左文右，各占 content 区一半
+            half = content_box[2] / 2
+            _add_bullets(slide, content_box[0] + half, content_box[1], half, content_box[3],
+                         [str(b) for b in item.get("bullets", [])], theme,
+                         size=_mode_font(theme, "main_page", "content_info", 18))
+            img_box = (content_box[0], content_box[1], half, content_box[3])
     if img_box:
-        data = _resolve_slide_image(item, "image_text")
         if data is None:
             _add_image_placeholder(slide, *img_box)
         else:
@@ -441,16 +450,25 @@ def _style_full_image(slide, item, theme, index, total, prs):
 
 
 def _style_quote(slide, item, theme, index, total, prs):
-    _add_page_background(slide, theme, prs)
+    data = _resolve_slide_image(item, "quote")
+    if data is not None:
+        try:
+            slide.shapes.add_picture(io.BytesIO(data), 0, 0, width=prs.slide_width, height=prs.slide_height)
+        except Exception:
+            data = None
+    if data is None:
+        _add_page_background(slide, theme, prs)
     box = _mode_box(theme, "main_page", "content_info")
     if box:
         _add_textbox(slide, *box, str(item.get("text", "")), theme,
-                     size=_mode_font(theme, "main_page", "content_info", 28), color=theme["title_color"], bold=True)
+                     size=_mode_font(theme, "main_page", "content_info", 28),
+                     color=(255, 255, 255) if data is not None else theme["title_color"], bold=True)
     source = item.get("source")
     if source:
         tx = box[0] if box else 0.5
         ty = (box[1] + box[3] + 0.3) if box else 4.0
-        _add_textbox(slide, tx, ty, 8, 0.5, "—— " + str(source), theme, size=16, color=theme["footer_color"])
+        _add_textbox(slide, tx, ty, 8, 0.5, "—— " + str(source), theme, size=16,
+                     color=(240, 240, 240) if data is not None else theme["footer_color"])
     _add_footer(slide, theme, index, total, prs)
 
 
