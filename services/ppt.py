@@ -18,6 +18,7 @@ from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
+from services import image_search
 from services import llm
 
 _FONT_CANDIDATES = [
@@ -182,6 +183,52 @@ def _normalize_slides(slides):
         item["layout"] = layout
         out.append(item)
     return out
+
+
+def _resolve_slide_image(item, layout):
+    """取该页配图字节；无关键词或搜图失败返回 None。"""
+    keyword = str(item.get("image", "")).strip()
+    if not keyword:
+        return None
+    if layout in ("full_image", "quote"):
+        keyword = keyword + " 壁纸"
+    return image_search.search(keyword)
+
+
+def _add_image_placeholder(slide, x=0.9, y=1.8, w=5.2, h=4.9):
+    box = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
+    box.fill.solid()
+    box.fill.fore_color.rgb = RGBColor(235, 238, 243)
+    box.line.color.rgb = RGBColor(210, 214, 220)
+    return box
+
+
+def _img_from_data(data, width, height, dark_overlay=False, white_overlay=False):
+    """把图片字节转成裁到尺寸的 Pillow 图；失败返回 None。"""
+    try:
+        img = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        return None
+    img = _fit(img, width, height)
+    if dark_overlay:
+        ov = Image.new("RGBA", (width, height), (0, 0, 0, 100))
+        img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+    elif white_overlay:
+        ov = Image.new("RGBA", (width, height), (255, 255, 255, 200))
+        img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
+    return img
+
+
+def _paste_image(base, data, box):
+    """把图片字节贴到 base 的 box 区域（cover 裁剪到 box 比例）；失败原样返回。"""
+    try:
+        sub = Image.open(io.BytesIO(data)).convert("RGB")
+    except Exception:
+        return base
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    sub = _fit(sub, bw, bh)
+    base.paste(sub, (box[0], box[1]))
+    return base
 
 
 def get_template(template_id=None):
@@ -393,26 +440,51 @@ def _style_image_text(slide, item, theme, index, total, prs):
     text_x = 6.0 if side == "left" else 0.9
     _add_bullets(slide, text_x, 1.8, 5.5, 4.9, [str(b) for b in item.get("bullets", [])], theme)
     img_x = 0.9 if side == "left" else 6.3
-    box = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(img_x), Inches(1.8), Inches(5.2), Inches(4.9))
-    box.fill.solid()
-    box.fill.fore_color.rgb = RGBColor(235, 238, 243)
-    box.line.color.rgb = RGBColor(210, 214, 220)
+    data = _resolve_slide_image(item, "image_text")
+    if data is None:
+        _add_image_placeholder(slide, img_x, 1.8, 5.2, 4.9)
+    else:
+        try:
+            slide.shapes.add_picture(io.BytesIO(data), Inches(img_x), Inches(1.8), Inches(5.2), Inches(4.9))
+        except Exception:
+            _add_image_placeholder(slide, img_x, 1.8, 5.2, 4.9)
     _add_footer(slide, theme, index, total)
 
 
 def _style_full_image(slide, item, theme, index, total, prs):
-    _set_bg(slide, theme["accent"])
+    data = _resolve_slide_image(item, "full_image")
+    if data is None:
+        bg = _bg_path(theme)
+        if bg:
+            slide.shapes.add_picture(bg, 0, 0, width=prs.slide_width, height=prs.slide_height)
+        else:
+            _set_bg(slide, theme["accent"])
+    else:
+        try:
+            slide.shapes.add_picture(io.BytesIO(data), 0, 0, width=prs.slide_width, height=prs.slide_height)
+        except Exception:
+            _set_bg(slide, theme["accent"])
     _add_textbox(slide, 0.9, 3.0, 11.6, 1.4, str(item.get("title", "")), theme, size=40, color=(255, 255, 255), bold=True)
     _add_footer(slide, theme, index, total)
 
 
 def _style_quote(slide, item, theme, index, total, prs):
-    _set_bg(slide, (255, 255, 255))
+    data = _resolve_slide_image(item, "quote")
+    if data is not None:
+        try:
+            slide.shapes.add_picture(io.BytesIO(data), 0, 0, width=prs.slide_width, height=prs.slide_height)
+        except Exception:
+            data = None
+    if data is None:
+        _set_bg(slide, (255, 255, 255))
+    on_image = data is not None
     _add_accent_bar(slide, theme, x=0.6, y=2.4, w=0.12, h=1.6)
-    _add_textbox(slide, 1.0, 2.2, 11.0, 2.0, str(item.get("text", "")), theme, size=28, color=theme["title_color"], bold=True)
+    _add_textbox(slide, 1.0, 2.2, 11.0, 2.0, str(item.get("text", "")), theme, size=28,
+                 color=(255, 255, 255) if on_image else theme["title_color"], bold=True)
     source = item.get("source")
     if source:
-        _add_textbox(slide, 1.0, 4.6, 11.0, 0.6, "—— " + str(source), theme, size=16, color=theme["footer_color"])
+        _add_textbox(slide, 1.0, 4.6, 11.0, 0.6, "—— " + str(source), theme, size=16,
+                     color=(240, 240, 240) if on_image else theme["footer_color"])
     _add_footer(slide, theme, index, total)
 
 
@@ -551,18 +623,26 @@ def _render_image_text(slide, theme, index, total, width, height):
     _draw_header(draw, theme, slide.get("title", ""), width)
     side = slide.get("image_side") or "left"
     if side == "left":
-        draw.rectangle([64, 168, 500, height - 80], fill=(235, 238, 243), outline=(210, 214, 220))
+        box = (64, 168, 500, height - 80)
         text_x, text_w = 560, width - 560 - 64
     else:
-        draw.rectangle([width - 500, 168, width - 64, height - 80], fill=(235, 238, 243), outline=(210, 214, 220))
+        box = (width - 500, 168, width - 64, height - 80)
         text_x, text_w = 100, width - 500 - 100 - 64
+    data = _resolve_slide_image(slide, "image_text")
+    if data is None:
+        draw.rectangle(box, fill=(235, 238, 243), outline=(210, 214, 220))
+    else:
+        img = _paste_image(img, data, box)
     _draw_bullets(draw, theme, [str(b) for b in slide.get("bullets", [])], text_x, 168, text_w, _load_font(24))
     _render_footer(draw, theme, width, height, index, total)
     return img
 
 
 def _render_full_image(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, fallback=theme["accent"])
+    data = _resolve_slide_image(slide, "full_image")
+    img = _img_from_data(data, width, height, dark_overlay=True) if data is not None else None
+    if img is None:
+        img = _img_with_bg(theme, width, height, fallback=theme["accent"])
     draw = ImageDraw.Draw(img)
     title_font = _load_font(56)
     for line in _wrap_text(draw, str(slide.get("title", "")), title_font, width - 192):
@@ -573,17 +653,23 @@ def _render_full_image(slide, theme, index, total, width, height):
 
 
 def _render_quote(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, white_overlay=True)
+    data = _resolve_slide_image(slide, "quote")
+    img = _img_from_data(data, width, height, dark_overlay=True) if data is not None else None
+    on_image = img is not None
+    if img is None:
+        img = _img_with_bg(theme, width, height, white_overlay=True)
     draw = ImageDraw.Draw(img)
     draw.rectangle([64, height // 2 - 80, 76, height // 2 + 60], fill=theme["accent"])
     quote_font = _load_font(40)
+    text_color = (255, 255, 255) if on_image else theme["title_color"]
+    source_color = (240, 240, 240) if on_image else theme["footer_color"]
     y = height // 2 - 60
     for line in _wrap_text(draw, str(slide.get("text", "")), quote_font, width - 200):
-        draw.text((100, y), line, font=quote_font, fill=theme["title_color"])
+        draw.text((100, y), line, font=quote_font, fill=text_color)
         y += 60
     source = slide.get("source")
     if source:
-        draw.text((100, y + 10), "—— " + str(source), font=_load_font(24), fill=theme["footer_color"])
+        draw.text((100, y + 10), "—— " + str(source), font=_load_font(24), fill=source_color)
     _render_footer(draw, theme, width, height, index, total)
     return img
 
