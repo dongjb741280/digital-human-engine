@@ -15,62 +15,46 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
 from services import llm
 
 _FONT_CANDIDATES = [
+    # macOS
     "/System/Library/Fonts/Hiragino Sans GB.ttc",
     "/System/Library/Fonts/STHeiti Medium.ttc",
     "/System/Library/Fonts/PingFang.ttc",
+    # Linux
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    # Windows
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/simhei.ttf",
 ]
+
+_FONT_NAME = "微软雅黑"
 
 _TEMPLATE_DIR = os.path.join(os.path.dirname(__file__), "templates")
 
+def _load_themes():
+    """从 templates/themes.json 加载主题配置（配色唯一事实源），颜色转 tuple。"""
+    path = os.path.join(_TEMPLATE_DIR, "themes.json")
+    with open(path, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    themes = []
+    for t in raw:
+        t = dict(t)
+        for key in ("accent", "title_color", "body_color", "footer_color", "cover_bg"):
+            t[key] = tuple(t[key])
+        themes.append(t)
+    return themes
+
+
 # 内置主题模板：id 与前端选中值一致，name 用于展示
 # bg 为背景图文件名（相对 templates 目录），cover_bg 为无背景图时的兜底色
-THEMES = [
-    {
-        "id": "0",
-        "name": "课程学习汇报",
-        "accent": (241, 111, 151),
-        "title_color": (190, 60, 100),
-        "body_color": (47, 47, 47),
-        "footer_color": (119, 132, 149),
-        "cover_bg": (241, 111, 151),
-        "bg": "bg_0.jpg",
-    },
-    {
-        "id": "1",
-        "name": "读书分享演示",
-        "accent": (160, 182, 73),
-        "title_color": (110, 130, 40),
-        "body_color": (47, 47, 47),
-        "footer_color": (119, 132, 149),
-        "cover_bg": (160, 182, 73),
-        "bg": "bg_1.jpg",
-    },
-    {
-        "id": "2",
-        "name": "蓝色通用商务",
-        "accent": (90, 170, 210),
-        "title_color": (40, 90, 140),
-        "body_color": (47, 47, 47),
-        "footer_color": (119, 132, 149),
-        "cover_bg": (40, 90, 140),
-        "bg": "bg_2.jpg",
-    },
-    {
-        "id": "3",
-        "name": "蓝色工作汇报总结",
-        "accent": (19, 117, 252),
-        "title_color": (19, 117, 252),
-        "body_color": (47, 47, 47),
-        "footer_color": (119, 132, 149),
-        "cover_bg": (19, 117, 252),
-        "bg": "bg_3.jpg",
-    },
-]
+THEMES = _load_themes()
 
 
 def _load_font(size: int):
@@ -80,6 +64,17 @@ def _load_font(size: int):
         except OSError:
             continue
     return ImageFont.load_default()
+
+
+def _set_run_font(run):
+    """给 run 设置中文字体（latin 与 east asian 都设，否则中文吃不到字体）。"""
+    run.font.name = _FONT_NAME
+    rPr = run._r.get_or_add_rPr()
+    ea = rPr.find(qn("a:ea"))
+    if ea is None:
+        ea = rPr.makeelement(qn("a:ea"), {})
+        rPr.append(ea)
+    ea.set("typeface", _FONT_NAME)
 
 
 def _bg_path(theme):
@@ -313,6 +308,7 @@ def _add_textbox(slide, x, y, w, h, text, theme, size=18, color=None, bold=False
         run.font.size = Pt(size)
         run.font.bold = bold
         run.font.color.rgb = RGBColor(*(color if color is not None else theme["body_color"]))
+        _set_run_font(run)
     return tb
 
 
@@ -327,6 +323,7 @@ def _add_bullets(slide, x, y, w, h, bullets, theme, size=18):
         run.text = "• " + str(b)
         run.font.size = Pt(size)
         run.font.color.rgb = RGBColor(*theme["body_color"])
+        _set_run_font(run)
     return tb
 
 
