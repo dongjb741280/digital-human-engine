@@ -1,7 +1,7 @@
-"""PPT 生成：LLM 生成幻灯片内容 -> python-pptx 生成 .pptx，Pillow 渲染幻灯片图片。
+"""PPT 生成：LLM 生成幻灯片内容 -> python-pptx 生成 .pptx。
 
 内置 4 套主题模板（配色 + 真实背景图），供 getppt 选择、generate_ppt 渲染。
-背景图来自 ai-to-pptx 模板抽取，存于 services/templates/。
+每页 PNG 预览由服务端 LibreOffice 从 .pptx 渲染；本模块仅用 Pillow 渲染主题缩略图。
 """
 import base64
 import io
@@ -10,7 +10,7 @@ import os
 import re
 import urllib.request
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.shapes import MSO_SHAPE
@@ -20,20 +20,6 @@ from pptx.util import Inches, Pt
 
 from services import image_search
 from services import llm
-
-_FONT_CANDIDATES = [
-    # macOS
-    "/System/Library/Fonts/Hiragino Sans GB.ttc",
-    "/System/Library/Fonts/STHeiti Medium.ttc",
-    "/System/Library/Fonts/PingFang.ttc",
-    # Linux
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
-    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
-    # Windows
-    "C:/Windows/Fonts/msyh.ttc",
-    "C:/Windows/Fonts/simhei.ttf",
-]
 
 _FONT_NAME = "微软雅黑"
 
@@ -56,15 +42,6 @@ def _load_themes():
 # 内置主题模板：id 与前端选中值一致，name 用于展示
 # bg 为背景图文件名（相对 templates 目录），cover_bg 为无背景图时的兜底色
 THEMES = _load_themes()
-
-
-def _load_font(size: int):
-    for path in _FONT_CANDIDATES:
-        try:
-            return ImageFont.truetype(path, size)
-        except OSError:
-            continue
-    return ImageFont.load_default()
 
 
 def _set_run_font(run):
@@ -203,34 +180,6 @@ def _add_image_placeholder(slide, x=0.9, y=1.8, w=5.2, h=4.9):
     return box
 
 
-def _img_from_data(data, width, height, dark_overlay=False, white_overlay=False):
-    """把图片字节转成裁到尺寸的 Pillow 图；失败返回 None。"""
-    try:
-        img = Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception:
-        return None
-    img = _fit(img, width, height)
-    if dark_overlay:
-        ov = Image.new("RGBA", (width, height), (0, 0, 0, 100))
-        img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
-    elif white_overlay:
-        ov = Image.new("RGBA", (width, height), (255, 255, 255, 200))
-        img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
-    return img
-
-
-def _paste_image(base, data, box):
-    """把图片字节贴到 base 的 box 区域（cover 裁剪到 box 比例）；失败原样返回。"""
-    try:
-        sub = Image.open(io.BytesIO(data)).convert("RGB")
-    except Exception:
-        return base
-    bw, bh = box[2] - box[0], box[3] - box[1]
-    sub = _fit(sub, bw, bh)
-    base.paste(sub, (box[0], box[1]))
-    return base
-
-
 def get_template(template_id=None):
     """按 id 或名称取主题，找不到时回退到第一套。"""
     if template_id is None or template_id == "":
@@ -278,22 +227,6 @@ def _render_thumbnail(theme, width: int = 320, height: int = 180) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
-
-
-def _wrap_text(draw, text: str, font, max_width: int):
-    lines = []
-    for raw_line in text.split("\n"):
-        line = ""
-        for ch in raw_line:
-            if draw.textlength(line + ch, font=font) <= max_width:
-                line += ch
-            else:
-                if line:
-                    lines.append(line)
-                line = ch
-        if line:
-            lines.append(line)
-    return lines or [""]
 
 
 def build_pptx(slides, theme=None) -> bytes:
@@ -508,201 +441,6 @@ def _style_closing(slide, item, theme, index, total, prs):
     else:
         _set_bg(slide, theme["cover_bg"])
     _add_textbox(slide, 0.9, 3.0, 11.6, 1.4, str(item.get("title", "") or "谢谢/总结"), theme, size=40, color=(255, 255, 255), bold=True)
-
-
-def render_slide(slide, theme=None, index: int = 0, total: int = 1, width: int = 1280, height: int = 720) -> bytes:
-    """把一页幻灯片按主题渲染成 PNG 图片（按 layout 分派 9 版式）。"""
-    theme = theme or THEMES[0]
-    layout = slide.get("layout") or "content"
-    img = {
-        "cover": _render_cover,
-        "agenda": _render_agenda,
-        "section": _render_section,
-        "content": _render_content,
-        "image_text": _render_image_text,
-        "full_image": _render_full_image,
-        "quote": _render_quote,
-        "comparison": _render_comparison,
-        "closing": _render_closing,
-    }[layout](slide, theme, index, total, width, height)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    return buf.getvalue()
-
-
-def _img_with_bg(theme, width, height, white_overlay=False, fallback=(255, 255, 255)):
-    """加载主题背景图裁到尺寸，可选叠蒙层；无图时用纯色兜底。"""
-    bg = _load_bg(theme)
-    if bg is not None:
-        img = _fit(bg, width, height)
-        alpha = 200 if white_overlay else 100
-        color = (255, 255, 255) if white_overlay else (0, 0, 0)
-        ov = Image.new("RGBA", (width, height), (*color, alpha))
-        img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
-    else:
-        img = Image.new("RGB", (width, height), fallback)
-    return img
-
-
-def _draw_header(draw, theme, title, width):
-    draw.rectangle([64, 48, 76, 128], fill=theme["accent"])
-    title_font = _load_font(38)
-    for line in _wrap_text(draw, str(title), title_font, width - 192):
-        draw.text((96, 52), line, font=title_font, fill=theme["title_color"])
-        break
-    draw.line([(96, 132), (width - 64, 132)], fill=(220, 224, 230), width=3)
-
-
-def _draw_bullets(draw, theme, bullets, x, y, max_width, font=None):
-    font = font or _load_font(26)
-    for b in bullets or []:
-        lines = _wrap_text(draw, str(b), font, max_width)
-        draw.ellipse([x, y + 8, x + 12, y + 20], fill=theme["accent"])
-        for line in lines:
-            draw.text((x + 28, y), line, font=font, fill=theme["body_color"])
-            y += 40
-        y += 12
-    return y
-
-
-def _render_cover(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, fallback=theme["cover_bg"])
-    draw = ImageDraw.Draw(img)
-    margin = int(width * 0.09)
-    title_font = _load_font(62)
-    sub_font = _load_font(26)
-    lines = _wrap_text(draw, str(slide.get("title", "")), title_font, width - margin * 2 - 50)
-    line_h = 80
-    start_y = height // 2 - 50 - (len(lines) - 1) * line_h // 2
-    draw.rectangle([margin, start_y - 8, margin + 8, start_y + (len(lines) - 1) * line_h + 8], fill=theme["accent"])
-    y = start_y
-    for line in lines:
-        draw.text((margin + 32, y), line, font=title_font, fill=(255, 255, 255), anchor="lm")
-        y += line_h
-    subtitle = str(slide.get("subtitle", "") or f"{theme['name']} · AI 生成")
-    draw.text((margin + 34, y + 6), subtitle, font=sub_font, fill=(235, 240, 248), anchor="lm")
-    return img
-
-
-def _render_agenda(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, white_overlay=True)
-    draw = ImageDraw.Draw(img)
-    _draw_header(draw, theme, "目录", width)
-    font = _load_font(30)
-    y = 200
-    for j, it in enumerate(slide.get("items", []) or []):
-        draw.text((128, y), f"{j + 1}. {it}", font=font, fill=theme["body_color"])
-        y += 70
-    _render_footer(draw, theme, width, height, index, total)
-    return img
-
-
-def _render_section(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, fallback=theme["accent"])
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([64, height // 2 - 50, 72, height // 2 + 30], fill=theme["accent"])
-    title_font = _load_font(52)
-    for line in _wrap_text(draw, str(slide.get("title", "")), title_font, width - 192):
-        draw.text((96, height // 2 - 40), line, font=title_font, fill=(255, 255, 255), anchor="lm")
-        break
-    return img
-
-
-def _render_content(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, white_overlay=True)
-    draw = ImageDraw.Draw(img)
-    _draw_header(draw, theme, slide.get("title", ""), width)
-    _draw_bullets(draw, theme, [str(b) for b in slide.get("bullets", [])], 100, 168, width - 200)
-    _render_footer(draw, theme, width, height, index, total)
-    return img
-
-
-def _render_image_text(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, white_overlay=True)
-    draw = ImageDraw.Draw(img)
-    _draw_header(draw, theme, slide.get("title", ""), width)
-    side = slide.get("image_side") or "left"
-    if side == "left":
-        box = (64, 168, 500, height - 80)
-        text_x, text_w = 560, width - 560 - 64
-    else:
-        box = (width - 500, 168, width - 64, height - 80)
-        text_x, text_w = 100, width - 500 - 100 - 64
-    data = _resolve_slide_image(slide, "image_text")
-    if data is None:
-        draw.rectangle(box, fill=(235, 238, 243), outline=(210, 214, 220))
-    else:
-        img = _paste_image(img, data, box)
-    _draw_bullets(draw, theme, [str(b) for b in slide.get("bullets", [])], text_x, 168, text_w, _load_font(24))
-    _render_footer(draw, theme, width, height, index, total)
-    return img
-
-
-def _render_full_image(slide, theme, index, total, width, height):
-    data = _resolve_slide_image(slide, "full_image")
-    img = _img_from_data(data, width, height, dark_overlay=True) if data is not None else None
-    if img is None:
-        img = _img_with_bg(theme, width, height, fallback=theme["accent"])
-    draw = ImageDraw.Draw(img)
-    title_font = _load_font(56)
-    for line in _wrap_text(draw, str(slide.get("title", "")), title_font, width - 192):
-        draw.text((96, height // 2 - 40), line, font=title_font, fill=(255, 255, 255), anchor="lm")
-        break
-    _render_footer(draw, theme, width, height, index, total)
-    return img
-
-
-def _render_quote(slide, theme, index, total, width, height):
-    data = _resolve_slide_image(slide, "quote")
-    img = _img_from_data(data, width, height, dark_overlay=True) if data is not None else None
-    on_image = img is not None
-    if img is None:
-        img = _img_with_bg(theme, width, height, white_overlay=True)
-    draw = ImageDraw.Draw(img)
-    draw.rectangle([64, height // 2 - 80, 76, height // 2 + 60], fill=theme["accent"])
-    quote_font = _load_font(40)
-    text_color = (255, 255, 255) if on_image else theme["title_color"]
-    source_color = (240, 240, 240) if on_image else theme["footer_color"]
-    y = height // 2 - 60
-    for line in _wrap_text(draw, str(slide.get("text", "")), quote_font, width - 200):
-        draw.text((100, y), line, font=quote_font, fill=text_color)
-        y += 60
-    source = slide.get("source")
-    if source:
-        draw.text((100, y + 10), "—— " + str(source), font=_load_font(24), fill=source_color)
-    _render_footer(draw, theme, width, height, index, total)
-    return img
-
-
-def _render_comparison(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, white_overlay=True)
-    draw = ImageDraw.Draw(img)
-    _draw_header(draw, theme, slide.get("title", ""), width)
-    left = slide.get("left") or {}
-    right = slide.get("right") or {}
-    col_font = _load_font(32)
-    draw.text((100, 180), str(left.get("title", "")), font=col_font, fill=theme["title_color"])
-    draw.text((width // 2 + 40, 180), str(right.get("title", "")), font=col_font, fill=theme["title_color"])
-    _draw_bullets(draw, theme, [str(p) for p in left.get("points", [])], 100, 240, width // 2 - 140, _load_font(22))
-    _draw_bullets(draw, theme, [str(p) for p in right.get("points", [])], width // 2 + 40, 240, width // 2 - 140, _load_font(22))
-    _render_footer(draw, theme, width, height, index, total)
-    return img
-
-
-def _render_closing(slide, theme, index, total, width, height):
-    img = _img_with_bg(theme, width, height, fallback=theme["cover_bg"])
-    draw = ImageDraw.Draw(img)
-    title_font = _load_font(56)
-    for line in _wrap_text(draw, str(slide.get("title", "") or "谢谢/总结"), title_font, width - 192):
-        draw.text((96, height // 2 - 40), line, font=title_font, fill=(255, 255, 255), anchor="lm")
-        break
-    return img
-
-
-def _render_footer(draw, theme, width, height, index, total):
-    font = _load_font(18)
-    text = f"{index} / {total}    {theme['name']}"
-    draw.text((width - 40, height - 36), text, font=font, fill=theme["footer_color"], anchor="rm")
 
 
 # ============ fabric 画布 JSON -> .pptx ============

@@ -546,7 +546,7 @@ async def generate_body(request: Request):
 
 @app.post("/generate_ppt")
 async def generate_ppt(request: Request):
-    """生成 PPT：LLM 生成幻灯片 -> python-pptx 生成 .pptx + Pillow 渲染每页图片 -> 上传 MinIO。"""
+    """生成 PPT：LLM 生成幻灯片 -> python-pptx 生成 .pptx -> 上传 MinIO。PNG 预览由服务端 LibreOffice 渲染。"""
     body = await request.json()
     title = body.get("title", "")
     text = body.get("text") or body.get("content", "")
@@ -561,21 +561,14 @@ async def generate_ppt(request: Request):
             ppt_key, pptx_bytes,
             "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
-        images = []
-        notes_map = {}
-        total = len(slides)
-        for i, s in enumerate(slides):
-            png_bytes = ppt.render_slide(s, theme, i, total)
-            img_key = f"copywriting/{ppt_id}/slides/{ppt_id}_{i}.png"
-            minio_util.upload_bytes(img_key, png_bytes, "image/png")
-            images.append(f"{config.MINIO_ENDPOINT}/{config.MINIO_BUCKET}/{img_key}")
-            notes_map[str(i)] = str(s.get("notes", ""))
+        # 每页 PNG 预览改由服务端 LibreOffice 从 .pptx 渲染（renderPptToImages），这里不再用 Pillow 逐页出图，只返回备注 map。
+        notes_map = {str(i): str(s.get("notes", "")) for i, s in enumerate(slides)}
         return {
             "code": "0000",
             "data": {
                 "pptUrl": ppt_key,
                 "recordDesc": record_desc,
-                "images": images,
+                "images": [],
                 "notesMap": notes_map,
                 "slides": slides,
             },
