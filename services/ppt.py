@@ -368,7 +368,10 @@ def _style_cover(slide, item, theme, index, total, prs):
     box = _mode_box(theme, "first_page", "title_info")
     if box:
         _add_textbox(slide, *box, str(item.get("title", "")), theme,
-                     size=_mode_font(theme, "first_page", "title_info", 36), color=(255, 255, 255), bold=True)
+                     size=_mode_font(theme, "first_page", "title_info", 36), color=theme["title_color"], bold=True)
+        _add_textbox(slide, box[0], box[1] + box[3] + 0.2, box[2], 0.5,
+                     str(item.get("subtitle", "") or f"{theme['name']} · AI 生成"),
+                     theme, size=14, color=theme["footer_color"])
 
 
 def _style_agenda(slide, item, theme, index, total, prs):
@@ -389,7 +392,7 @@ def _style_section(slide, item, theme, index, total, prs):
     box = _mode_box(theme, "first_page", "title_info")
     if box:
         _add_textbox(slide, *box, str(item.get("title", "")), theme,
-                     size=_mode_font(theme, "first_page", "title_info", 36), color=(255, 255, 255), bold=True)
+                     size=_mode_font(theme, "first_page", "title_info", 36), color=theme["title_color"], bold=True)
 
 
 def _style_content(slide, item, theme, index, total, prs):
@@ -500,7 +503,9 @@ def _style_closing(slide, item, theme, index, total, prs):
     box = _mode_box(theme, "first_page", "title_info")
     if box:
         _add_textbox(slide, *box, str(item.get("title", "") or "谢谢/总结"), theme,
-                     size=_mode_font(theme, "first_page", "title_info", 36), color=(255, 255, 255), bold=True)
+                     size=_mode_font(theme, "first_page", "title_info", 36), color=theme["title_color"], bold=True)
+        _add_textbox(slide, box[0], box[1] + box[3] + 0.2, box[2], 0.5, f"{theme['name']} · AI 生成",
+                     theme, size=14, color=theme["footer_color"])
 
 
 # ============ fabric 画布 JSON -> .pptx ============
