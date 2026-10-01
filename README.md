@@ -56,6 +56,7 @@ uvicorn app:app --host 0.0.0.0 --port 60013
 | `LLM_API_BASE` | `https://ai-route.huihaohealth.com` | LLM 服务（OpenAI 兼容） |
 | `LLM_API_KEY` | 空 | LLM 密钥（文案/PPT 生成必填） |
 | `LLM_MODEL` | `claude-opus-4-7-cc` | LLM 模型名 |
+| `PPT_MASTER_ENABLED` | 空（关） | 开启 ppt-master 引擎 `/generate_ppt_master`（`=1` 开启） |
 | `GPT_SOVITS_API` | `http://127.0.0.1:9880` | GPT-SoVITS 推理 API |
 | `GPT_SOVITS_TIMEOUT` | `120` | GPT-SoVITS 请求超时（秒） |
 | `GPT_SOVITS_GPT_WEIGHTS` | `GPT_weights_v2/pretrained.ckpt` | 预训练基础权重 |
@@ -84,6 +85,7 @@ uvicorn app:app --host 0.0.0.0 --port 60013
 | `/generate_outline` | POST | 生成课件提纲 | 真实（LLM） |
 | `/generate_body` | POST | 生成课件正文 | 真实（LLM） |
 | `/generate_ppt` | POST | 生成 PPT（LLM→pptx+逐页图片） | 真实 |
+| `/generate_ppt_master` | POST | ppt-master 引擎生成 PPT（topic/sources/images/template，SVG→pptx + 母版/版式） | 真实（默认关，`PPT_MASTER_ENABLED=1` 开启） |
 | `/getppt` | GET | 模板查询 | 桩 |
 | `/ppttoimage` | POST | PPT 转图片 | 桩 |
 | `/{inter_name:path}` | GET | 通用 GET 兜底 | 桩 |
@@ -107,6 +109,7 @@ Java 侧 `application-local.yaml` 里各接口指向了多个端口（6001/60013
   - `musetalk`（需 GPU）：部署 MuseTalk 推理服务，配置 `MUSETALK_API`。
   - 未接入时也可走 `wav2lip.change_video_passthrough`（只合音轨，不生成口型），用于跑通流程。
 - **文案/PPT 生成**：配置 `LLM_API_KEY`（OpenAI 兼容）。
+- **ppt-master 引擎** `/generate_ppt_master`：复用 `LLM_API_KEY`（同一网关，Anthropic `/v1/messages`）；引擎已 vendor 到 `skills/ppt-master/`，依赖见 `skills/ppt-master/requirements.txt`。默认关闭（`PPT_MASTER_ENABLED=1` 开启）。内置命令白名单 + 路径沙箱（bash 只放行引擎脚本/只读命令，read/write 限引擎根目录内），但**非 OS 级沙箱**，仍不建议对公网开放。
 - **PPT 转图片** `/ppttoimage`：需 LibreOffice + PDF 转图片（当前为桩）。
 
 ## 回调

@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 
 import config
-from services import llm, minio_util, musetalk, ppt, voice, video, wav2lip
+from services import llm, minio_util, musetalk, ppt, ppt_master, voice, video, wav2lip
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -575,6 +575,62 @@ async def generate_ppt(request: Request):
         }
     except Exception as e:  # noqa: BLE001
         logger.exception("generate_ppt error")
+        return {"code": "9999", "msg": str(e)}
+
+
+@app.post("/generate_ppt_master")
+async def generate_ppt_master(request: Request):
+    """ppt-master 引擎生成 PPT：Claude API tool-use 循环 → SVG → svg_to_pptx（原生可编辑 + 母版/版式）。
+
+    ⚠️ 无沙箱：给 LLM 的 bash 工具用 shell=True 直跑宿主命令、无白名单。topic/sources/URL
+    用户可控且会进 prompt，存在提示注入 → 远程命令执行风险。仅限可信内网/受控调用。
+
+    默认关闭：需设环境变量 PPT_MASTER_ENABLED=1 才会启用。
+
+    入参：{ title|topic, pages, images: none|web, sources: [路径或 URL], template: 模板根路径,
+           lang, canvas }；产出 .pptx 上传 MinIO 后返回 pptUrl。
+    """
+    if not config.PPT_MASTER_ENABLED:
+        return {"code": "9999", "msg": "ppt-master engine disabled (set PPT_MASTER_ENABLED=1 to enable)"}
+    body = await request.json()
+    title = body.get("title") or body.get("topic") or ""
+    if not title:
+        return {"code": "9999", "msg": "missing title/topic"}
+    pages = max(4, min(int(body.get("pages") or 8), 30))
+    images = body.get("images") or "none"
+    sources = body.get("sources") or []
+    if isinstance(sources, str):
+        sources = [sources]
+    template = body.get("template") or None
+    lang = body.get("lang") or "zh-CN"
+    canvas = body.get("canvas") or "ppt169"
+    slug = "pptmaster_" + str(int(time.time() * 1000))
+    try:
+        result = await asyncio.to_thread(
+            ppt_master.generate_deck,
+            title, slug, lang, canvas, pages, images, sources, template,
+        )
+        pptx_path = result.get("pptx_path")
+        if not pptx_path:
+            raise RuntimeError("生成未产出 .pptx")
+        with open(pptx_path, "rb") as f:
+            pptx_bytes = f.read()
+        ppt_key = f"copywriting/{slug}/{slug}.pptx"
+        minio_util.upload_bytes(
+            ppt_key, pptx_bytes,
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        )
+        return {
+            "code": "0000",
+            "data": {
+                "pptUrl": ppt_key,
+                "recordDesc": f"{title}.pptx",
+                "summary": result.get("summary", ""),
+                "usage": result.get("usage", {}),
+            },
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("generate_ppt_master error")
         return {"code": "9999", "msg": str(e)}
 
 

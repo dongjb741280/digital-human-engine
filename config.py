@@ -48,6 +48,10 @@ LLM_API_BASE = os.getenv("LLM_API_BASE", "https://ai-route.huihaohealth.com")
 LLM_API_KEY = os.getenv("LLM_API_KEY", "")
 LLM_MODEL = os.getenv("LLM_MODEL", "claude-opus-4-7-cc")
 
+# ppt-master 引擎（/generate_ppt_master）。给 LLM 的 bash 工具无 OS 级沙箱，默认关闭；
+# 仅可信内网显式开启（PPT_MASTER_ENABLED=1）。
+PPT_MASTER_ENABLED = os.getenv("PPT_MASTER_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
 # GPT-SoVITS 推理 API 地址（GPT-SoVITS 项目 api.py 启动的服务）
 GPT_SOVITS_API = os.getenv("GPT_SOVITS_API", "http://127.0.0.1:9880")
 # 推理超时（秒），合成较长文本需要更大值

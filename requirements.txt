@@ -6,3 +6,5 @@ edge-tts==6.1.12
 faster-whisper==1.0.3
 opencc-python-reimplemented==0.1.7
 langchain-openai==1.6.6
+# ppt-master 引擎（/generate_ppt_master）。引擎自身依赖见 skills/ppt-master/requirements.txt
+anthropic>=1.9.0
