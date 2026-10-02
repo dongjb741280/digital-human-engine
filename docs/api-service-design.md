@@ -34,6 +34,8 @@
 | 联网调研（topic-research） | `web_search`（DuckDuckGo HTML，零配置）+ `web_fetch`（复用 `web_to_md.py`）两个工具；无 source 时先搜证补事实缺口 |
 | prompt caching | 系统提示 + 每轮末条消息打 `cache_control: ephemeral` 断点，跨轮次复用稳定前缀 |
 | 异步任务化 | 内存任务队列 + `POST /generate_ppt_master/submit` + `GET /generate_ppt_master/status/{jobId}`（前端轮询，替代同步阻塞） |
+| 讲解词（speaker notes） | `--with-notes` 导出（`notes/total.md` → `total_md_split.py` 拆分），引擎从 `notes/` 读回 `notesMap` 随响应返回 |
+| source 图片导入 | `import-sources` 自动把 source 文档图片传播进 `<project>/images/`，SVG 直接引用（绕开 bash 白名单无 `cp` 的限制） |
 
 ---
 
@@ -49,15 +51,15 @@
                     │       ▼                      │               │
                     │  services/ppt_master.py       │               │
                     │  · Claude API tool-use 循环   │               │
-                    │  · tools: bash/read/write     │               │
+                    │  · tools: bash/read/write + search/fetch   │               │
                     │  · 命令白名单 + 路径沙箱       │               │
                     └──────┬───────────────────────┼───────────────┘
                            │ 调用脚本               │ 读/写文件
                            ▼                       ▼
                     ┌─────────────────────────────────────────────┐
                     │        skills/ppt-master（本地引擎）          │
-                    │  project_manager / svg_quality_checker /     │
-                    │  source_to_md / image_search / svg_to_pptx   │
+                    │  project_manager(import-sources) /          │
+                    │  svg_quality_checker / svg_to_pptx 等        │
                     └──────┬──────────────────────────────────────┘
                            │ 产物 .pptx
                            ▼
@@ -143,13 +145,13 @@
 | 能力 | 参数 | 行为 |
 |---|---|---|
 | **主题直出** | 仅 `title` | topic-only，先 `web_search`/`web_fetch` 联网调研建立事实基线（写 `*_research.md` + `*.facts.json` 并 import），再 quick-generate |
-| **文档输入** | `sources` | `source_to_md.py` 转 md（PDF/DOCX/PPTX/XLSX/网页；URL 走 `web_to_md.py`），作为权威内容源，模型不杜撰；残留事实缺口再 `web_search`/`web_fetch` 补 |
+| **文档输入** | `sources` | `import-sources` 导入并转 md（PDF/DOCX/PPTX/XLSX/网页；URL 走 `web_to_md.py`），自动把 source 图片传播进 `images/`，作为权威内容源，模型不杜撰；残留事实缺口再 `web_search`/`web_fetch` 补 |
 | **网页搜图** | `images="web"` | `image_search.py` 搜图链 `pexels → pixabay → openverse → wikimedia`（有 key 排前）；`none` 则纯原生 SVG |
 | **模板/结构化** | `template` | 传 Layout/Deck 工作区根，走 `apply-template-workspace`，产出带真实 `p:sldMaster`/`p:sldLayout` 继承的 deck；不传则 free-design 扁平页 |
 
 **图片来源优先级**：带 source 且 source 含图时，优先用 source 提供的图（溯源 `license_tier: manual`）；`image_search.py` 只在 topic-only 或 source 无合适图时触发。
 
-**已 e2e 验证**：主题直出（4 页）、网页搜图（Pixabay+Wikimedia）、PDF source、URL source（微信公众号）、`presentation_core`（1 母版 7 布局）、`中国电信`（2 母版 5 布局）。
+**已 e2e 验证**：主题直出（4 页）、网页搜图（Pixabay+Wikimedia）、PDF source、URL source（微信公众号，含 source 图片入图 + 每页讲解词）、`presentation_core`（1 母版 7 布局）、`中国电信`（2 母版 5 布局）。
 
 ---
 
