@@ -389,9 +389,9 @@ def generate_deck(
         )
     else:
         image_policy = (
-            "Image policy: prefer native SVG/emoji/icon visuals — do NOT run image_search.py or "
-            "image_gen.py. Supplied-source images are still usable: copy a relevant source image "
-            "into `<project>/images/` and reference it."
+            "Image policy: reference the supplied-source images that import-sources put into "
+            "`<project>/images/` where they fit; otherwise native SVG/emoji/icon visuals. Do NOT "
+            "run image_search.py or image_gen.py."
         )
 
     abs_sources = [
@@ -401,14 +401,14 @@ def generate_deck(
     if abs_sources:
         src_list = "\n".join(f"   - {p}" for p in abs_sources)
         source_step = (
-            "SOURCES (authoritative): convert and read them before authoring. For each source below run\n"
-            f"   `python3 {SKILL_DIR}/scripts/source_to_md.py <source_path> -o <project>/sources/<name>.md`\n"
-            "   (a source may be a local file or a URL; source_to_md.py auto-detects and fetches URLs).\n"
-            "   The conversion also downloads the source's images into `<project>/sources/<name>_files/`;\n"
-            "   if a page benefits from one, copy the chosen file into `<project>/images/` and reference it\n"
-            "   in the SVG (keep its provenance in image_sources.json).\n"
-            "   Then read_file every produced .md. Facts, terminology, and structure must come from these\n"
-            f"   sources, never from general knowledge.\n   Sources:\n{src_list}"
+            "SOURCES (authoritative): import and read them before authoring. For each source below run\n"
+            f"   `python3 {SKILL_DIR}/scripts/project_manager.py import-sources <project> <source_path>`\n"
+            "   (a source may be a local file or a URL; import-sources auto-detects, converts, and copies\n"
+            "   the source's images into `<project>/images/`). Then read_file every produced .md under\n"
+            "   `<project>/sources/`. Reference the source's own images from `<project>/images/` in your SVG\n"
+            "   on pages where they fit — prefer them over generic native SVG; do not leave them all unused.\n"
+            "   Facts, terminology, and structure must come from these sources, never from general knowledge.\n"
+            f"   Sources:\n{src_list}"
         )
         content_basis = "the provided sources (plus any researched supplement) — do not invent, omit, or contradict them"
         research_step = (
