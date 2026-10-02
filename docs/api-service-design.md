@@ -33,6 +33,7 @@
 | 产物 | `projects/<slug>_*/exports/*.pptx` → MinIO `copywriting/<slug>/<slug>.pptx` |
 | 联网调研（topic-research） | `web_search`（DuckDuckGo HTML，零配置）+ `web_fetch`（复用 `web_to_md.py`）两个工具；无 source 时先搜证补事实缺口 |
 | prompt caching | 系统提示 + 每轮末条消息打 `cache_control: ephemeral` 断点，跨轮次复用稳定前缀 |
+| 异步任务化 | 内存任务队列 + `POST /generate_ppt_master/submit` + `GET /generate_ppt_master/status/{jobId}`（前端轮询，替代同步阻塞） |
 
 ---
 
@@ -89,6 +90,18 @@
 ---
 
 ## 5. 接口契约
+
+**推荐**：异步接口（前端轮询，避免分钟级同步阻塞）。
+
+`POST /generate_ppt_master/submit`（立即返回 jobId）
+
+**请求体**：同下（同步版），返回 `{"code":"0000","data":{"jobId":"<uuid>"}}`。
+
+`GET /generate_ppt_master/status/{jobId}`（轮询）
+
+**响应**：`{"code":"0000","data":{"status":"queued|running|success|failed","progress":{"turn":N,...},"result":{...},"error":"..."}}`；`success` 时 `result` 为下面的同步版 `data`。
+
+---
 
 `POST /generate_ppt_master`（同步阻塞，生成是分钟级，调用方需容忍长耗时）
 
@@ -186,5 +199,4 @@
 ## 10. 未接能力（后续）
 
 - AI 图片生成（`image_gen.py` + `IMAGE_BACKEND`/provider key）
-- 异步任务化（队列 + 轮询/SSE，替代当前同步阻塞）
 - OS 级沙箱（容器/nsjail/独立用户/出站白名单）

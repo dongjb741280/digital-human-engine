@@ -86,6 +86,8 @@ uvicorn app:app --host 0.0.0.0 --port 60013
 | `/generate_body` | POST | 生成课件正文 | 真实（LLM） |
 | `/generate_ppt` | POST | 生成 PPT（LLM→pptx+逐页图片） | 真实 |
 | `/generate_ppt_master` | POST | ppt-master 引擎生成 PPT（topic/sources/images/template，SVG→pptx + 母版/版式） | 真实（默认关，`PPT_MASTER_ENABLED=1` 开启） |
+| `/generate_ppt_master/submit` | POST | ppt-master 异步提交（入队后台生成，返回 jobId） | 真实（同上） |
+| `/generate_ppt_master/status/{jobId}` | GET | ppt-master 任务状态（queued/running/success/failed） | 真实（同上） |
 | `/getppt` | GET | 模板查询 | 桩 |
 | `/ppttoimage` | POST | PPT 转图片 | 桩 |
 | `/{inter_name:path}` | GET | 通用 GET 兜底 | 桩 |

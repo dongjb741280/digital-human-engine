@@ -11,7 +11,9 @@ import asyncio
 import json
 import logging
 import os
+import threading
 import time
+import uuid
 
 import httpx
 from fastapi import FastAPI, Request
@@ -578,6 +580,76 @@ async def generate_ppt(request: Request):
         return {"code": "9999", "msg": str(e)}
 
 
+# ============ ppt-master 异步任务队列（内存态，单进程） ============
+
+_PPT_MASTER_JOBS: dict[str, dict] = {}
+_PPT_MASTER_JOBS_LOCK = threading.Lock()
+
+
+def _ppt_master_job_set(job_id: str, **fields) -> None:
+    with _PPT_MASTER_JOBS_LOCK:
+        _PPT_MASTER_JOBS.setdefault(job_id, {}).update(fields)
+
+
+def _ppt_master_job_get(job_id: str) -> dict:
+    with _PPT_MASTER_JOBS_LOCK:
+        return dict(_PPT_MASTER_JOBS.get(job_id, {}))
+
+
+def _generate_ppt_master_body(body: dict, on_progress=None) -> dict:
+    """核心：调 ppt_master 生成 deck → 上传 MinIO，返回 data dict（同步阻塞）。"""
+    title = body.get("title") or body.get("topic") or ""
+    pages = max(4, min(int(body.get("pages") or 8), 30))
+    images = body.get("images") or "none"
+    sources = body.get("sources") or []
+    if isinstance(sources, str):
+        sources = [sources]
+    template = body.get("template") or None
+    lang = body.get("lang") or "zh-CN"
+    canvas = body.get("canvas") or "ppt169"
+    slug = "pptmaster_" + str(int(time.time() * 1000)) + "_" + uuid.uuid4().hex[:6]
+    result = ppt_master.generate_deck(
+        title, slug, lang, canvas, pages, images, sources, template,
+        on_progress=on_progress,
+    )
+    pptx_path = result.get("pptx_path")
+    if not pptx_path:
+        raise RuntimeError("生成未产出 .pptx")
+    with open(pptx_path, "rb") as f:
+        pptx_bytes = f.read()
+    ppt_key = f"copywriting/{slug}/{slug}.pptx"
+    minio_util.upload_bytes(
+        ppt_key, pptx_bytes,
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    return {
+        "pptUrl": ppt_key,
+        "recordDesc": f"{title}.pptx",
+        "summary": result.get("summary", ""),
+        "usage": result.get("usage", {}),
+    }
+
+
+def _run_ppt_master_job(job_id: str, body: dict) -> None:
+    """后台线程执行生成，更新任务状态/进度。"""
+    _ppt_master_job_set(job_id, status="running")
+    try:
+        data = _generate_ppt_master_body(
+            body, on_progress=lambda p: _ppt_master_job_set(job_id, progress=p)
+        )
+        _ppt_master_job_set(job_id, status="success", result=data)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("ppt-master job %s failed", job_id)
+        _ppt_master_job_set(job_id, status="failed", error=str(e))
+
+
+def _validate_ppt_master_request(body: dict) -> dict:
+    title = body.get("title") or body.get("topic") or ""
+    if not title:
+        return {"code": "9999", "msg": "missing title/topic"}
+    return {}
+
+
 @app.post("/generate_ppt_master")
 async def generate_ppt_master(request: Request):
     """ppt-master 引擎生成 PPT：Claude API tool-use 循环 → SVG → svg_to_pptx（原生可编辑 + 母版/版式）。
@@ -589,49 +661,45 @@ async def generate_ppt_master(request: Request):
 
     入参：{ title|topic, pages, images: none|web, sources: [路径或 URL], template: 模板根路径,
            lang, canvas }；产出 .pptx 上传 MinIO 后返回 pptUrl。
+
+    同步阻塞版（生成是分钟级）。前端优先用 submit + status 异步接口。
     """
     if not config.PPT_MASTER_ENABLED:
         return {"code": "9999", "msg": "ppt-master engine disabled (set PPT_MASTER_ENABLED=1 to enable)"}
     body = await request.json()
-    title = body.get("title") or body.get("topic") or ""
-    if not title:
-        return {"code": "9999", "msg": "missing title/topic"}
-    pages = max(4, min(int(body.get("pages") or 8), 30))
-    images = body.get("images") or "none"
-    sources = body.get("sources") or []
-    if isinstance(sources, str):
-        sources = [sources]
-    template = body.get("template") or None
-    lang = body.get("lang") or "zh-CN"
-    canvas = body.get("canvas") or "ppt169"
-    slug = "pptmaster_" + str(int(time.time() * 1000))
+    err = _validate_ppt_master_request(body)
+    if err:
+        return err
     try:
-        result = await asyncio.to_thread(
-            ppt_master.generate_deck,
-            title, slug, lang, canvas, pages, images, sources, template,
-        )
-        pptx_path = result.get("pptx_path")
-        if not pptx_path:
-            raise RuntimeError("生成未产出 .pptx")
-        with open(pptx_path, "rb") as f:
-            pptx_bytes = f.read()
-        ppt_key = f"copywriting/{slug}/{slug}.pptx"
-        minio_util.upload_bytes(
-            ppt_key, pptx_bytes,
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        )
-        return {
-            "code": "0000",
-            "data": {
-                "pptUrl": ppt_key,
-                "recordDesc": f"{title}.pptx",
-                "summary": result.get("summary", ""),
-                "usage": result.get("usage", {}),
-            },
-        }
+        data = await asyncio.to_thread(_generate_ppt_master_body, body)
+        return {"code": "0000", "data": data}
     except Exception as e:  # noqa: BLE001
         logger.exception("generate_ppt_master error")
         return {"code": "9999", "msg": str(e)}
+
+
+@app.post("/generate_ppt_master/submit")
+async def generate_ppt_master_submit(request: Request):
+    """ppt-master 异步提交：入队后台生成，立即返回 jobId。"""
+    if not config.PPT_MASTER_ENABLED:
+        return {"code": "9999", "msg": "ppt-master engine disabled (set PPT_MASTER_ENABLED=1 to enable)"}
+    body = await request.json()
+    err = _validate_ppt_master_request(body)
+    if err:
+        return err
+    job_id = uuid.uuid4().hex
+    _ppt_master_job_set(job_id, status="queued", created=time.time(), progress=None, result=None, error=None)
+    threading.Thread(target=_run_ppt_master_job, args=(job_id, body), daemon=True).start()
+    return {"code": "0000", "data": {"jobId": job_id}}
+
+
+@app.get("/generate_ppt_master/status/{job_id}")
+async def generate_ppt_master_status(job_id: str):
+    """ppt-master 任务状态查询：queued/running/success/failed + progress + result。"""
+    job = _ppt_master_job_get(job_id)
+    if not job:
+        return {"code": "9999", "msg": "job not found"}
+    return {"code": "0000", "data": job}
 
 
 @app.post("/regenerate_ppt")
