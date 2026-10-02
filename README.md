@@ -109,7 +109,7 @@ Java 侧 `application-local.yaml` 里各接口指向了多个端口（6001/60013
   - `musetalk`（需 GPU）：部署 MuseTalk 推理服务，配置 `MUSETALK_API`。
   - 未接入时也可走 `wav2lip.change_video_passthrough`（只合音轨，不生成口型），用于跑通流程。
 - **文案/PPT 生成**：配置 `LLM_API_KEY`（OpenAI 兼容）。
-- **ppt-master 引擎** `/generate_ppt_master`：复用 `LLM_API_KEY`（同一网关，Anthropic `/v1/messages`）；引擎已 vendor 到 `skills/ppt-master/`，依赖见 `skills/ppt-master/requirements.txt`。默认关闭（`PPT_MASTER_ENABLED=1` 开启）。内置命令白名单 + 路径沙箱（bash 只放行引擎脚本/只读命令，read/write 限引擎根目录内），但**非 OS 级沙箱**，仍不建议对公网开放。
+- **ppt-master 引擎** `/generate_ppt_master`：复用 `LLM_API_KEY`（同一网关，Anthropic `/v1/messages`）；引擎已 vendor 到 `skills/ppt-master/`，依赖见 `skills/ppt-master/requirements.txt`。默认关闭（`PPT_MASTER_ENABLED=1` 开启）。内置命令白名单 + 路径沙箱（bash 只放行引擎脚本/只读命令，read/write 限引擎根目录内），但**非 OS 级沙箱**，仍不建议对公网开放。支持 topic-research（`web_search` DuckDuckGo + `web_fetch` 复用 `web_to_md.py`，无 source 时联网补事实缺口）。
 - **PPT 转图片** `/ppttoimage`：需 LibreOffice + PDF 转图片（当前为桩）。
 
 ## 回调

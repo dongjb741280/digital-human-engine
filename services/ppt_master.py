@@ -11,10 +11,14 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Callable
+from urllib.parse import parse_qs, unquote, urlparse
 
 import anthropic
+import httpx
+from bs4 import BeautifulSoup
 
 import config
 
@@ -28,6 +32,11 @@ MAX_TURNS = 300
 BASH_TIMEOUT_S = 600
 READ_LIMIT = 600          # read_file 单次最多返回行数
 BASH_STDOUT_CAP = 8000    # bash 单次最多返回 stdout 字符数
+WEB_SEARCH_TIMEOUT_S = 30
+WEB_FETCH_TIMEOUT_S = 90
+WEB_FETCH_CAP = 12000     # web_fetch 单次最多返回字符数
+_WEB_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+           "(KHTML, like Gecko) Chrome/120.0 Safari/537.36")
 
 
 def _client() -> anthropic.Anthropic:
@@ -88,6 +97,39 @@ TOOLS: list[dict] = [
             "additionalProperties": False,
         },
     },
+    {
+        "name": "web_search",
+        "description": (
+            "Search the web for authoritative information on a topic. Returns a numbered list of "
+            "results (title + URL + snippet). Use it during topic-research to find primary/authoritative "
+            "sources for factual gaps; then web_fetch the best pages to read them in full."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query."},
+                "limit": {"type": "integer", "description": "Max results to return (default 5, max 10)."},
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "web_fetch",
+        "description": (
+            "Fetch a web page and convert it to Markdown (via the skill's web_to_md.py, which handles "
+            "TLS fingerprinting and Chinese portals). Returns the page text, truncated. Use it to read "
+            "an authoritative source in full during topic-research."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to fetch (http/https only)."},
+            },
+            "required": ["url"],
+            "additionalProperties": False,
+        },
+    },
 ]
 
 SYSTEM = """You are an autonomous agent that generates a native-editable PowerPoint (.pptx) deck using
@@ -113,8 +155,8 @@ PROCEDURE:
    time, filenames `01_*.svg`, `02_*.svg`, ... in order. NEVER write a shell/python script that
    batch-generates pages — that is forbidden by the skill and degrades quality.
 5. Canvas: {canvas} (16:9 -> viewBox "0 0 1280 720"). Deck language: {lang}. Keep the deck concise
-   ({pages} pages). Do NOT run topic-research and do NOT stop to ask questions; generate the content
-   directly from {content_basis}. {image_policy}
+   ({pages} pages). {research_step} Generate the content from {content_basis}; do NOT stop to ask
+   questions. {image_policy}
 6. Finish exactly as quick-generate.md section 4 prescribes: run the lockless final checker with
    `--quick-generate --canonical-authoring --stage final --json`, fix every blocking error, then
    export with `svg_to_pptx.py <project> --quick-generate --no-notes`. The final .pptx must exist
@@ -182,6 +224,63 @@ def _is_safe_bash_command(cmd: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _web_search(query: str, limit: int = 5) -> str:
+    limit = max(1, min(limit, 10))
+    try:
+        r = httpx.post(
+            "https://html.duckduckgo.com/html/",
+            data={"q": query},
+            headers={"User-Agent": _WEB_UA},
+            timeout=WEB_SEARCH_TIMEOUT_S,
+            follow_redirects=True,
+        )
+        r.raise_for_status()
+    except Exception as e:  # noqa: BLE001
+        return f"ERROR: web search failed: {e}"
+    soup = BeautifulSoup(r.text, "html.parser")
+    out: list[str] = []
+    for res in soup.select(".result")[:limit]:
+        a = res.select_one(".result__a")
+        if a is None:
+            continue
+        title = a.get_text(" ", strip=True)
+        href = a.get("href", "")
+        url = href
+        if "uddg=" in href:
+            url = unquote(parse_qs(urlparse(href).query).get("uddg", [href])[0])
+        snip = res.select_one(".result__snippet")
+        snippet = snip.get_text(" ", strip=True) if snip else ""
+        out.append(f"- {title}\n  {url}\n  {snippet}")
+    return "\n".join(out) if out else "(no results)"
+
+
+def _web_fetch(url: str) -> str:
+    if not url.startswith(("http://", "https://")):
+        return "ERROR: only http/https URLs are allowed"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "page.md"
+        env = dict(os.environ)
+        env["PATH"] = f"{VENV_BIN}:{env.get('PATH', '')}"
+        try:
+            r = subprocess.run(
+                [
+                    str(VENV_BIN / "python3"),
+                    str(SKILL_DIR / "scripts" / "source_to_md" / "web_to_md.py"),
+                    url, "-o", str(out), "--no-images",
+                ],
+                cwd=str(PROJECT_ROOT), env=env, capture_output=True, text=True,
+                timeout=WEB_FETCH_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            return f"ERROR: fetch timed out after {WEB_FETCH_TIMEOUT_S}s"
+        if r.returncode != 0 or not out.exists():
+            return f"ERROR: fetch failed (exit {r.returncode})\n{r.stderr[:2000]}"
+        text = out.read_text(encoding="utf-8", errors="replace")
+        if len(text) > WEB_FETCH_CAP:
+            text = text[:WEB_FETCH_CAP] + "\n...[truncated]"
+        return text
+
+
 def _execute_tool(name: str, args: dict) -> str:
     if name == "bash":
         cmd = args.get("command", "")
@@ -235,6 +334,12 @@ def _execute_tool(name: str, args: dict) -> str:
         p.write_text(content, encoding="utf-8")
         return f"wrote {len(content)} chars to {p}"
 
+    if name == "web_search":
+        return _web_search(args.get("query", ""), int(args.get("limit") or 5))
+
+    if name == "web_fetch":
+        return _web_fetch(args.get("url", ""))
+
     return f"ERROR: unknown tool {name}"
 
 
@@ -282,10 +387,22 @@ def generate_deck(
             "   Then read_file every produced .md. Facts, terminology, and structure must come from these\n"
             f"   sources, never from general knowledge.\n   Sources:\n{src_list}"
         )
-        content_basis = "the provided sources only — do not invent, omit, or contradict them"
+        content_basis = "the provided sources (plus any researched supplement) — do not invent, omit, or contradict them"
+        research_step = (
+            "After converting and reading the supplied sources, run topic-research (web_search + "
+            "web_fetch) ONLY for any remaining planning-critical factual gaps, then write and import "
+            "the research supplement per the skill's topic-research stage before authoring."
+        )
     else:
         source_step = ""
-        content_basis = "your own knowledge and keep facts accurate but non-controversial"
+        content_basis = "the researched sources — do not invent unsupported facts"
+        research_step = (
+            "Run topic-research FIRST to build a factual baseline: use web_search to find authoritative "
+            "primary sources, web_fetch to read the best pages in full, then save "
+            f"`projects/{slug}_research.md` + `projects/{slug}_research.facts.json` (the facts JSON is "
+            "the URL provenance) and import them with `project_manager.py import-sources` before authoring. "
+            "Base externally-verifiable facts on researched sources, not your own knowledge."
+        )
 
     if template:
         abs_template = str(_resolve_path(template))
@@ -305,7 +422,7 @@ def generate_deck(
     system = SYSTEM.format(
         skill_dir=SKILL_DIR, slug=slug, lang=lang, canvas=canvas, pages=pages, topic=topic,
         image_policy=image_policy, source_step=source_step, content_basis=content_basis,
-        template_step=template_step,
+        research_step=research_step, template_step=template_step,
     )
     messages: list[dict] = [{"role": "user", "content": f"生成主题《{topic}》的 PPT（{lang}，{canvas}，约 {pages} 页）。"}]
 

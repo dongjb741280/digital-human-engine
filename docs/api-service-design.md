@@ -31,6 +31,7 @@
 | 配置开关 | `PPT_MASTER_ENABLED`（`config.py`，默认关） |
 | 依赖 | `anthropic` + `skills/ppt-master/requirements.txt` |
 | 产物 | `projects/<slug>_*/exports/*.pptx` → MinIO `copywriting/<slug>/<slug>.pptx` |
+| 联网调研（topic-research） | `web_search`（DuckDuckGo HTML，零配置）+ `web_fetch`（复用 `web_to_md.py`）两个工具；无 source 时先搜证补事实缺口 |
 
 ---
 
@@ -69,11 +70,13 @@
 
 ## 4. LLM 编排层（tool-use 循环）
 
-采用方案 A——**Claude API 手动 tool-use 循环**（`services/ppt_master.py`），四个工具 `bash` / `read_file` / `write_file`：
+采用方案 A——**Claude API 手动 tool-use 循环**（`services/ppt_master.py`），六个工具 `bash` / `read_file` / `write_file` / `web_search` / `web_fetch`：
 
 - `bash`：跑引擎脚本（`project_manager.py`、`svg_quality_checker.py`、`svg_to_pptx.py` 等），`cwd` 固定引擎根，`python3` 指向 `.venv`；**经命令白名单过滤**。
 - `read_file`：读 `SKILL.md` / workflows / references / 转好的 source md；**限引擎根目录内**。
 - `write_file`：模型逐页手写 `svg_output/*.svg`；**限引擎根目录内**，绝不做批量生成脚本。
+- `web_search`：DuckDuckGo HTML 搜索（零配置，httpx + bs4 解析），返回 title/url/snippet，供 topic-research 找权威源。
+- `web_fetch`：复用 `web_to_md.py` 抓取网页转 Markdown（含 TLS 指纹伪装 + 私网地址拦截），供 topic-research 精读页面。
 
 关键 API 形态（对应当前模型）：
 
@@ -124,8 +127,8 @@
 
 | 能力 | 参数 | 行为 |
 |---|---|---|
-| **主题直出** | 仅 `title` | topic-only，模型凭自身知识 quick-generate |
-| **文档输入** | `sources` | `source_to_md.py` 转 md（PDF/DOCX/PPTX/XLSX/网页；URL 走 `web_to_md.py`），作为权威内容源，模型不杜撰 |
+| **主题直出** | 仅 `title` | topic-only，先 `web_search`/`web_fetch` 联网调研建立事实基线（写 `*_research.md` + `*.facts.json` 并 import），再 quick-generate |
+| **文档输入** | `sources` | `source_to_md.py` 转 md（PDF/DOCX/PPTX/XLSX/网页；URL 走 `web_to_md.py`），作为权威内容源，模型不杜撰；残留事实缺口再 `web_search`/`web_fetch` 补 |
 | **网页搜图** | `images="web"` | `image_search.py` 搜图链 `pexels → pixabay → openverse → wikimedia`（有 key 排前）；`none` 则纯原生 SVG |
 | **模板/结构化** | `template` | 传 Layout/Deck 工作区根，走 `apply-template-workspace`，产出带真实 `p:sldMaster`/`p:sldLayout` 继承的 deck；不传则 free-design 扁平页 |
 
@@ -181,7 +184,6 @@
 
 ## 10. 未接能力（后续）
 
-- topic-research（`web_search`/`web_fetch`，补 source 事实缺口）
 - AI 图片生成（`image_gen.py` + `IMAGE_BACKEND`/provider key）
 - prompt caching（缓存 skill 指令前缀）
 - 异步任务化（队列 + 轮询/SSE，替代当前同步阻塞）
