@@ -147,7 +147,7 @@
 | **主题直出** | 仅 `title` | topic-only，先 `web_search`/`web_fetch` 联网调研建立事实基线（写 `*_research.md` + `*.facts.json` 并 import），再 quick-generate |
 | **文档输入** | `sources` | `import-sources` 导入并转 md（PDF/DOCX/PPTX/XLSX/网页；URL 走 `web_to_md.py`），自动把 source 图片传播进 `images/`，作为权威内容源，模型不杜撰；残留事实缺口再 `web_search`/`web_fetch` 补 |
 | **网页搜图** | `images="web"` | `image_search.py` 搜图链 `pexels → pixabay → openverse → wikimedia`（有 key 排前）；`none` 则纯原生 SVG |
-| **模板/结构化** | `template` | 传 Layout/Deck 工作区根，走 `apply-template-workspace`，产出带真实 `p:sldMaster`/`p:sldLayout` 继承的 deck；不传则 free-design 扁平页 |
+| **模板/结构化** | `template` | 传 Layout/Deck 工作区根，走 `apply-template-workspace`，产出带真实 `p:sldMaster`/`p:sldLayout` 继承的 deck；不传则 free-design 扁平页（如何新建 Deck 模版见 [`deck-template-authoring.md`](./deck-template-authoring.md)） |
 
 **图片来源优先级**：带 source 且 source 含图时，优先用 source 提供的图（溯源 `license_tier: manual`）；`image_search.py` 只在 topic-only 或 source 无合适图时触发。
 
