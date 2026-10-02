@@ -32,6 +32,7 @@
 | 依赖 | `anthropic` + `skills/ppt-master/requirements.txt` |
 | 产物 | `projects/<slug>_*/exports/*.pptx` → MinIO `copywriting/<slug>/<slug>.pptx` |
 | 联网调研（topic-research） | `web_search`（DuckDuckGo HTML，零配置）+ `web_fetch`（复用 `web_to_md.py`）两个工具；无 source 时先搜证补事实缺口 |
+| prompt caching | 系统提示 + 每轮末条消息打 `cache_control: ephemeral` 断点，跨轮次复用稳定前缀 |
 
 ---
 
@@ -83,7 +84,7 @@
 - `model = config.LLM_MODEL`（默认 `claude-opus-4-7-cc`），复用 `LLM_API_KEY` / `LLM_API_BASE`（同一网关，Anthropic `/v1/messages`）。
 - `thinking: {type: "adaptive"}` + `output_config: {effort: "high"}`；流式输出（`messages.stream`）。
 - 串行推进：每轮只走一页或一个门禁，符合 ppt-master 的 `P01–P05 → gate → … → final gate` 节奏。
-- 指令文件是稳定静态前缀，**未接 prompt caching**（省 ~90% 输入成本的后续项）。
+- 指令文件是稳定静态前缀，**已接 prompt caching**：系统提示 + 每轮末条消息打 `cache_control: ephemeral` 缓存断点，命中后省 ~90% 输入成本（`usage.cache_read_input_tokens` 可观测）。
 
 ---
 
@@ -163,7 +164,7 @@
 |---|---|
 | 4~10 页 deck token | 输入 ~80–200K（指令 + 上下文），输出 ~50–150K（SVG 代码） |
 | 模型成本 | `claude-opus-4-7-cc`（价格以网关为准）：约 $1–5 / 份 |
-| 指令前缀缓存 | 未接；命中后省 ~90% 输入成本（后续项） |
+| 指令前缀缓存 | 已接（`cache_control: ephemeral`，系统提示 + 对话断点）；命中后省 ~90% 输入成本 |
 | 图片 | 网页搜图 ≈ 零成本（免费档）；AI 生成单独计费（未接） |
 
 > 成本优化顺序：**缓存指令前缀 → effort 调优 → 按需降模型**（先测，别盲降）。
@@ -185,6 +186,5 @@
 ## 10. 未接能力（后续）
 
 - AI 图片生成（`image_gen.py` + `IMAGE_BACKEND`/provider key）
-- prompt caching（缓存 skill 指令前缀）
 - 异步任务化（队列 + 轮询/SSE，替代当前同步阻塞）
 - OS 级沙箱（容器/nsjail/独立用户/出站白名单）

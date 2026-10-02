@@ -348,6 +348,23 @@ def _find_pptx(slug: str) -> Path | None:
     return matches[-1] if matches else None
 
 
+def _add_cache_breakpoint(messages: list[dict]) -> None:
+    """在最后一条消息的最后一个内容块打 ephemeral 缓存断点，缓存整段对话前缀。
+
+    断点只会落在 user 消息上（str 或 tool_result dict 列表）；assistant 内容块是 SDK
+    模型对象，不在断点路径上。命中后后续轮次只按增量计费。
+    """
+    if not messages:
+        return
+    content = messages[-1].get("content")
+    if isinstance(content, str):
+        messages[-1]["content"] = [
+            {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+        ]
+    elif isinstance(content, list) and content and isinstance(content[-1], dict):
+        content[-1]["cache_control"] = {"type": "ephemeral"}
+
+
 def generate_deck(
     topic: str,
     slug: str,
@@ -424,18 +441,28 @@ def generate_deck(
         image_policy=image_policy, source_step=source_step, content_basis=content_basis,
         research_step=research_step, template_step=template_step,
     )
+    # 系统提示是稳定静态前缀，打缓存断点，跨轮次复用（省 ~90% 输入成本）
+    system_blocks = [
+        {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+    ]
     messages: list[dict] = [{"role": "user", "content": f"生成主题《{topic}》的 PPT（{lang}，{canvas}，约 {pages} 页）。"}]
 
-    usage = {"input_tokens": 0, "output_tokens": 0}
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
     last_text = ""
 
     for turn in range(1, MAX_TURNS + 1):
+        _add_cache_breakpoint(messages)
         with client.messages.stream(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             thinking={"type": "adaptive"},
             output_config={"effort": "high"},
-            system=system,
+            system=system_blocks,
             tools=TOOLS,
             messages=messages,
         ) as stream:
@@ -443,6 +470,8 @@ def generate_deck(
 
         usage["input_tokens"] += resp.usage.input_tokens
         usage["output_tokens"] += resp.usage.output_tokens
+        usage["cache_read_input_tokens"] += getattr(resp.usage, "cache_read_input_tokens", 0) or 0
+        usage["cache_creation_input_tokens"] += getattr(resp.usage, "cache_creation_input_tokens", 0) or 0
         messages.append({"role": "assistant", "content": resp.content})
 
         if resp.stop_reason == "tool_use":
