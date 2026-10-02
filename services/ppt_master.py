@@ -389,8 +389,9 @@ def generate_deck(
         )
     else:
         image_policy = (
-            "Image policy: native SVG/emoji/icon visuals only — do NOT run image_search.py or "
-            "image_gen.py."
+            "Image policy: prefer native SVG/emoji/icon visuals — do NOT run image_search.py or "
+            "image_gen.py. Supplied-source images are still usable: copy a relevant source image "
+            "into `<project>/images/` and reference it."
         )
 
     abs_sources = [
@@ -403,6 +404,9 @@ def generate_deck(
             "SOURCES (authoritative): convert and read them before authoring. For each source below run\n"
             f"   `python3 {SKILL_DIR}/scripts/source_to_md.py <source_path> -o <project>/sources/<name>.md`\n"
             "   (a source may be a local file or a URL; source_to_md.py auto-detects and fetches URLs).\n"
+            "   The conversion also downloads the source's images into `<project>/sources/<name>_files/`;\n"
+            "   if a page benefits from one, copy the chosen file into `<project>/images/` and reference it\n"
+            "   in the SVG (keep its provenance in image_sources.json).\n"
             "   Then read_file every produced .md. Facts, terminology, and structure must come from these\n"
             f"   sources, never from general knowledge.\n   Sources:\n{src_list}"
         )
