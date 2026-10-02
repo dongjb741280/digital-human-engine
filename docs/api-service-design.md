@@ -130,7 +130,8 @@
     "pptUrl": "copywriting/pptmaster_<ts>/pptmaster_<ts>.pptx",   // MinIO 对象键
     "recordDesc": "海豚的秘密.pptx",
     "summary": "...",                     // 模型收尾摘要
-    "usage": {"input_tokens": 84307, "output_tokens": 46946}
+    "usage": {"input_tokens": 84307, "output_tokens": 46946},
+    "notesMap": {"0": "本页讲解词...", "1": "..."}   // 每页演讲备注（讲解词），键为页码（0 起）
   }
 }
 ```

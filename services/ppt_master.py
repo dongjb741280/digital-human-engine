@@ -158,9 +158,11 @@ PROCEDURE:
    ({pages} pages). {research_step} Generate the content from {content_basis}; do NOT stop to ask
    questions. {image_policy}
 6. Finish exactly as quick-generate.md section 4 prescribes: run the lockless final checker with
-   `--quick-generate --canonical-authoring --stage final --json`, fix every blocking error, then
-   export with `svg_to_pptx.py <project> --quick-generate --no-notes`. The final .pptx must exist
-   under `<project>/exports/`.
+   `--quick-generate --canonical-authoring --stage final --json`, fix every blocking error. Then
+   generate per-page speaker notes (讲解词): read {skill_dir}/references/executor-notes.md, write
+   `notes/total.md`, split with `python3 {skill_dir}/scripts/total_md_split.py <project>`, and
+   export with `svg_to_pptx.py <project> --quick-generate --with-notes`. The final .pptx must
+   exist under `<project>/exports/`.
 
 When finished, reply with ONLY a compact summary: the absolute .pptx path, the slide count, and one
 line of notes (nothing else).

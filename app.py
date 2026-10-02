@@ -14,6 +14,7 @@ import os
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
@@ -627,7 +628,24 @@ def _generate_ppt_master_body(body: dict, on_progress=None) -> dict:
         "recordDesc": f"{title}.pptx",
         "summary": result.get("summary", ""),
         "usage": result.get("usage", {}),
+        "notesMap": _extract_project_notes(pptx_path),
     }
+
+
+def _extract_project_notes(pptx_path: str) -> dict:
+    """从项目 notes/ 目录读取每页讲解词（total_md_split.py 产出的按页 .md）。
+
+    页号按文件名（与 SVG 同名、零填充）排序，返回 {str(页码): 讲解词}。
+    """
+    project_dir = Path(pptx_path).parent.parent
+    notes_dir = project_dir / "notes"
+    if not notes_dir.is_dir():
+        return {}
+    notes_map: dict[str, str] = {}
+    files = sorted(nf for nf in notes_dir.glob("*.md") if nf.name != "total.md")
+    for i, nf in enumerate(files):
+        notes_map[str(i)] = nf.read_text(encoding="utf-8", errors="replace").strip()
+    return notes_map
 
 
 def _run_ppt_master_job(job_id: str, body: dict) -> None:
