@@ -16,8 +16,14 @@ services/
   wav2lip.py           # 口型合成（Wav2Lip，CPU 可跑）
   musetalk.py          # 口型合成（MuseTalk，远程 HTTP，需 GPU）
   ppt.py               # PPT 生成（LLM + python-pptx + Pillow）
+  ppt_master.py        # ppt-master 引擎封装（Anthropic tool-use 驱动）
+  image_search.py      # 百度图片搜索（关键词抓图，带缓存）
+  templates/           # PPT 模板（mode1/mode2/themes.json）
 scripts/
   download_backgrounds.py  # 批量下载背景图并上传 MinIO、输出入库 SQL
+skills/
+  ppt-master/          # vendor 的 ppt-master 引擎（/generate_ppt_master 用）
+docs/                  # 设计文档（api-service-design / ppt-spec / deck-template-authoring）
 ```
 
 ## 启动
@@ -26,7 +32,7 @@ scripts/
 cd digital-human-engine
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app:app --host 0.0.0.0 --port 60013
+.venv/bin/uvicorn app:app --host 0.0.0.0 --port 60013
 ```
 
 > 依赖说明：`requirements.txt` 仅覆盖 HTTP/语音链路。抠图、视频、PPT 功能还依赖
@@ -47,7 +53,7 @@ uvicorn app:app --host 0.0.0.0 --port 60013
 | `MATTING_MODEL` | `u2net` | rembg 抠像模型（u2net / isnet-general-use / birefnet-general） |
 | `LIPSYNC_MODEL` | `wav2lip` | 口型合成：wav2lip（CPU）/ musetalk（GPU） |
 | `WAV2LIP_HOME` | 空 | Wav2Lip 仓库根目录（`LIPSYNC_MODEL=wav2lip` 时必填） |
-| `WAV2LIP_PYTHON` | `<WAV2LIP_HOME>/.venv/bin/python` | Wav2Lip venv 的 python |
+| `WAV2LIP_PYTHON` | 空 | Wav2Lip venv 的 python（留空用 `<WAV2LIP_HOME>/.venv/bin/python`） |
 | `WAV2LIP_CHECKPOINT` | `checkpoints/wav2lip_gan.pth` | Wav2Lip 权重路径 |
 | `WAV2LIP_FACE_DET` | `face_detection/detection/sfd/s3fd.pth` | 人脸检测权重 |
 | `WAV2LIP_BATCH_SIZE` | `16` | 推理 batch size |
@@ -85,6 +91,7 @@ uvicorn app:app --host 0.0.0.0 --port 60013
 | `/generate_outline` | POST | 生成课件提纲 | 真实（LLM） |
 | `/generate_body` | POST | 生成课件正文 | 真实（LLM） |
 | `/generate_ppt` | POST | 生成 PPT（LLM→pptx+逐页图片） | 真实 |
+| `/regenerate_ppt` | POST | 按 fabric 画布 JSON 重新生成 .pptx（不调 LLM） | 真实 |
 | `/generate_ppt_master` | POST | ppt-master 引擎生成 PPT（topic/sources/images/template，SVG→pptx + 母版/版式） | 真实（默认关，`PPT_MASTER_ENABLED=1` 开启） |
 | `/generate_ppt_master/submit` | POST | ppt-master 异步提交（入队后台生成，返回 jobId） | 真实（同上） |
 | `/generate_ppt_master/status/{jobId}` | GET | ppt-master 任务状态（queued/running/success/failed） | 真实（同上） |
