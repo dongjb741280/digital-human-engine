@@ -599,3 +599,18 @@ def _add_image_shape(slide, obj):
     except Exception:
         return
 
+
+def extract_notes(pptx_bytes: bytes) -> list:
+    """从 .pptx 提取每页 speaker notes，按页序返回（无备注返回空串）。"""
+    prs = Presentation(io.BytesIO(pptx_bytes))
+    result = []
+    for slide in prs.slides:
+        text = ""
+        try:
+            if slide.has_notes_slide:
+                text = slide.notes_slide.notes_text_frame.text or ""
+        except Exception:
+            text = ""
+        result.append(text)
+    return result
+

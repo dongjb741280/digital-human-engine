@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WOPI 在线编辑测试</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; }
+  label { font-size: 14px; }
+  input { width: 460px; padding: 8px; font-size: 14px; }
+  button { padding: 8px 16px; font-size: 14px; cursor: pointer; }
+  #msg { margin: 12px 0; color: #555; min-height: 1.2em; }
+  iframe { width: 100%; height: 82vh; border: 1px solid #ccc; display: none; }
+</style>
+</head>
+<body>
+  <h3>WOPI 在线编辑测试</h3>
+  <div>
+    <label>MinIO key（.pptx）：</label>
+    <input id="key" value="copywriting/wopi_test/test.pptx">
+    <button onclick="openEdit()">打开编辑</button>
+  </div>
+  <div id="msg"></div>
+  <iframe id="frame"></iframe>
+
+<script>
+const API = 'http://192.168.1.4:60013';   // 本系统 Python 服务
+
+async function openEdit() {
+  const msg = document.getElementById('msg');
+  const frame = document.getElementById('frame');
+  const key = document.getElementById('key').value.trim();
+  if (!key) { msg.textContent = '请填写 MinIO key'; return; }
+
+  msg.textContent = '获取 token ...';
+  try {
+    // 1. 拿 access_token + wopiSrc
+    const resp = await fetch(API + '/ppt/open_edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pptUrl: key, user: 'tester' }),
+    });
+    const j = await resp.json();
+    if (j.code !== '0000') throw new Error(j.msg || JSON.stringify(j));
+    const wopiSrc = j.data.wopiSrc;
+
+    // 2. impress(pptx) 编辑地址（硬编码，避免跨域 fetch discovery 被 CORS 拦）
+    const editUrl = 'http://localhost:9980/browser/201368fc8d/cool.html?';
+
+    // 3. 加载 iframe
+    frame.src = editUrl + 'WOPISrc=' + encodeURIComponent(wopiSrc);
+    frame.style.display = 'block';
+    msg.textContent = '已打开编辑器';
+  } catch (e) {
+    msg.textContent = '错误: ' + e.message;
+    console.error(e);
+  }
+}
+</script>
+</body>
+</html>

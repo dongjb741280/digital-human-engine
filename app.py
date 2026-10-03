@@ -17,16 +17,25 @@ import uuid
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
 
 import config
-from services import llm, minio_util, musetalk, ppt, ppt_master, voice, video, wav2lip
+from services import llm, minio_util, musetalk, ppt, ppt_master, voice, video, wav2lip, wopi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="AI Digital Python Backend")
+
+# 浏览器直连测试用（开发环境放开；生产按需收紧来源）
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 JAVA_UPDATE_VOICE = "/digital-api/system/voiceManager/updateVoice"
 JAVA_UPDATE_VOICE_FINAL = "/digital-api/system/voiceManager/updateVoiceBypython"
@@ -746,6 +755,135 @@ async def ppt_to_image(request: Request):
     """PPT 转图片（桩）。真实实现需 LibreOffice + pdf 转图片。"""
     _ = await request.json()
     return {"code": "0000", "images": []}
+
+
+@app.post("/ppt/notes")
+async def ppt_notes(request: Request):
+    """提取 .pptx 每页 speaker notes（供编辑后重渲染预览时精确对应备注）。"""
+    body = await request.json()
+    ppt_url = body.get("pptUrl") or body.get("ppt_key")
+    if not ppt_url:
+        return {"code": "9999", "msg": "缺少 pptUrl"}
+    try:
+        pptx_bytes = minio_util.download_bytes(ppt_url)
+        notes = ppt.extract_notes(pptx_bytes)
+        return {"code": "0000", "data": {"notes": notes}}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("ppt_notes error")
+        return {"code": "9999", "msg": str(e)}
+
+
+# ============ WOPI host（Collabora Online 在线编辑 .pptx） ============
+
+_WOPI_PPTX_CT = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def _wopi_verify(file_id: str, access_token: str):
+    """校验 access_token，返回 (file_id, user)。"""
+    try:
+        token_file, user = wopi.verify_token(access_token)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    if token_file != file_id:
+        raise HTTPException(status_code=401, detail="token file mismatch")
+    return token_file, user
+
+
+@app.post("/ppt/open_edit")
+async def ppt_open_edit(request: Request):
+    """前端"在线编辑"入口：签发 access_token，返回 WOPI 编辑所需信息。"""
+    body = await request.json()
+    ppt_key = body.get("pptUrl") or body.get("ppt_key") or body.get("key")
+    if not ppt_key:
+        return {"code": "9999", "msg": "缺少 pptUrl"}
+    user = str(body.get("user") or body.get("userId") or "user")
+    token = wopi.make_token(ppt_key, user)
+    return {
+        "code": "0000",
+        "data": {
+            "fileId": ppt_key,
+            "accessToken": token,
+            "wopiSrc": f"{config.WOPI_HOST}/wopi/files/{ppt_key}?access_token={token}",
+        },
+    }
+
+
+@app.get("/wopi/files/{file_id:path}/contents")
+async def wopi_get_file(file_id: str, access_token: str = ""):
+    """GetFile：下发 .pptx 二进制。"""
+    file_id, _ = _wopi_verify(file_id, access_token)
+    data = minio_util.download_bytes(file_id)
+    return Response(content=data, media_type=_WOPI_PPTX_CT)
+
+
+@app.post("/wopi/files/{file_id:path}/contents")
+async def wopi_put_file(file_id: str, request: Request, access_token: str = ""):
+    """PutFile：保存编辑后的 .pptx 回 MinIO。"""
+    file_id, _ = _wopi_verify(file_id, access_token)
+    lock_id = request.headers.get("X-WOPI-Lock", "")
+    current = wopi.get_lock(file_id)
+    if current and current != lock_id:
+        return Response(status_code=409, headers={"X-WOPI-Lock": current})
+    data = await request.body()
+    minio_util.upload_bytes(file_id, data, _WOPI_PPTX_CT)
+    return Response(headers={"X-WOPI-ItemVersion": wopi.bump_version(file_id)})
+
+
+@app.post("/wopi/files/{file_id:path}")
+async def wopi_file_ops(file_id: str, request: Request, access_token: str = ""):
+    """锁操作（X-WOPI-Override: LOCK/UNLOCK/REFRESH_LOCK/GET_LOCK）。"""
+    file_id, _ = _wopi_verify(file_id, access_token)
+    override = request.headers.get("X-WOPI-Override", "")
+    lock_id = request.headers.get("X-WOPI-Lock", "")
+
+    if override == "LOCK":
+        if not lock_id:
+            return Response(status_code=400)
+        conflict = wopi.lock(file_id, lock_id)
+        if conflict is not None:
+            return Response(status_code=409, headers={"X-WOPI-Lock": conflict})
+        return Response(status_code=200)
+
+    if override == "UNLOCK":
+        conflict = wopi.unlock(file_id, lock_id)
+        if conflict is not None:
+            return Response(status_code=409, headers={"X-WOPI-Lock": conflict})
+        return Response(status_code=200)
+
+    if override == "REFRESH_LOCK":
+        conflict = wopi.refresh_lock(file_id, lock_id)
+        if conflict is not None:
+            return Response(status_code=409, headers={"X-WOPI-Lock": conflict})
+        return Response(status_code=200)
+
+    if override == "GET_LOCK":
+        current = wopi.get_lock(file_id)
+        if current is None:
+            return Response(status_code=409, headers={"X-WOPI-Lock": ""})
+        return Response(status_code=200, headers={"X-WOPI-Lock": current})
+
+    return Response(status_code=400)
+
+
+@app.get("/wopi/files/{file_id:path}")
+async def wopi_check_file_info(file_id: str, access_token: str = ""):
+    """CheckFileInfo：返回文件元信息。"""
+    file_id, user = _wopi_verify(file_id, access_token)
+    info = minio_util.stat(file_id)
+    return {
+        "BaseFileName": file_id.rsplit("/", 1)[-1],
+        "Size": info.size,
+        "OwnerId": user,
+        "UserId": user,
+        "UserFriendlyName": user,
+        "UserCanWrite": True,
+        "SupportsUpdate": True,
+        "SupportsLocks": True,
+        "SupportsGetLock": True,
+        "SupportsRename": False,
+        "SupportsDeleteFile": False,
+        "Version": wopi.current_version(file_id),
+    }
 
 
 @app.get("/{inter_name:path}")

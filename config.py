@@ -59,3 +59,8 @@ GPT_SOVITS_TIMEOUT = float(os.getenv("GPT_SOVITS_TIMEOUT", "120"))
 # GPT-SoVITS 预训练基础权重（zero-shot 推理所有声音共用，路径需 GPT-SoVITS 侧可访问）
 GPT_SOVITS_GPT_WEIGHTS = os.getenv("GPT_SOVITS_GPT_WEIGHTS", "GPT_weights_v2/pretrained.ckpt")
 GPT_SOVITS_SOVITS_WEIGHTS = os.getenv("GPT_SOVITS_SOVITS_WEIGHTS", "SoVITS_weights_v2/pretrained.pth")
+
+# WOPI host（Collabora Online 在线编辑 PPT）
+WOPI_SECRET = os.getenv("WOPI_SECRET", "dev-wopi-secret-change-me")
+# CODE 服务端可达的本系统地址（Docker 内访问宿主 macOS 用 host.docker.internal）
+WOPI_HOST = os.getenv("WOPI_HOST", "http://localhost:60013")

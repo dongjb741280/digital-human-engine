@@ -33,6 +33,11 @@ def download_bytes(object_key: str) -> bytes:
         resp.release_conn()
 
 
+def stat(object_key: str):
+    client = get_client()
+    return client.stat_object(config.MINIO_BUCKET, object_key)
+
+
 def upload_bytes(object_key: str, data: bytes, content_type: str = "application/octet-stream") -> str:
     client = get_client()
     client.put_object(

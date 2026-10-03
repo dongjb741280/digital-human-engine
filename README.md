@@ -67,6 +67,8 @@ pip install -r requirements.txt
 | `GPT_SOVITS_TIMEOUT` | `120` | GPT-SoVITS 请求超时（秒） |
 | `GPT_SOVITS_GPT_WEIGHTS` | `GPT_weights_v2/pretrained.ckpt` | 预训练基础权重 |
 | `GPT_SOVITS_SOVITS_WEIGHTS` | `SoVITS_weights_v2/pretrained.pth` | 预训练基础权重 |
+| `WOPI_SECRET` | `dev-wopi-secret-change-me` | WOPI access_token 签名密钥（生产必须改） |
+| `WOPI_HOST` | `http://localhost:60013` | CODE 服务端可达的本系统地址（Docker 内访问宿主用 `http://host.docker.internal:60013`） |
 
 ## 接口清单（与 Java 对应）
 
@@ -97,6 +99,9 @@ pip install -r requirements.txt
 | `/generate_ppt_master/status/{jobId}` | GET | ppt-master 任务状态（queued/running/success/failed） | 真实（同上） |
 | `/getppt` | GET | 模板查询 | 桩 |
 | `/ppttoimage` | POST | PPT 转图片 | 桩 |
+| `/ppt/open_edit` | POST | 签发 WOPI access_token，返回在线编辑入口（fileId/accessToken/wopiSrc） | 真实 |
+| `/wopi/files/{fileId}` | GET/POST | WOPI host：CheckFileInfo / 锁操作（LOCK/UNLOCK/REFRESH_LOCK/GET_LOCK） | 真实 |
+| `/wopi/files/{fileId}/contents` | GET/POST | WOPI host：GetFile / PutFile | 真实 |
 | `/{inter_name:path}` | GET | 通用 GET 兜底 | 桩 |
 
 ## 端口说明
@@ -120,6 +125,39 @@ Java 侧 `application-local.yaml` 里各接口指向了多个端口（6001/60013
 - **文案/PPT 生成**：配置 `LLM_API_KEY`（OpenAI 兼容）。
 - **ppt-master 引擎** `/generate_ppt_master`：复用 `LLM_API_KEY`（同一网关，Anthropic `/v1/messages`）；引擎已 vendor 到 `skills/ppt-master/`，依赖见 `skills/ppt-master/requirements.txt`。默认关闭（`PPT_MASTER_ENABLED=1` 开启）。内置命令白名单 + 路径沙箱（bash 只放行引擎脚本/只读命令，read/write 限引擎根目录内），但**非 OS 级沙箱**，仍不建议对公网开放。支持 topic-research（`web_search` DuckDuckGo + `web_fetch` 复用 `web_to_md.py`，无 source 时联网补事实缺口）。
 - **PPT 转图片** `/ppttoimage`：需 LibreOffice + PDF 转图片（当前为桩）。
+
+## 在线编辑（Collabora Online / WOPI）
+
+用浏览器在线编辑生成后的 .pptx（像 PowerPoint 一样直接改文件），本系统实现 WOPI host，把 Collabora 的读写桥接到 MinIO。桌面版 LibreOffice 不能嵌网页，浏览器里用的是 **Collabora Online（CODE）**。
+
+### 本地跑通（`ssl.enable=false`）
+
+```bash
+docker run -d --name code -p 9980:9980 \
+  -e "username=admin" -e "password=xxx" \
+  -e "extra_params=--o:ssl.enable=false --o:ssl.termination=true" \
+  --restart always collabora/code
+```
+
+启动本系统时设置（Docker 内的 CODE 访问宿主 macOS）：
+
+```bash
+WOPI_HOST=http://host.docker.internal:60013 uvicorn app:app --host 0.0.0.0 --port 60013
+```
+
+### 编辑流程
+
+1. 前端调用 `POST /ppt/open_edit`，传入 `{"pptUrl": "<MinIO key>", "user": "..."}`，拿到 `accessToken` 和 `wopiSrc`。
+2. 用 CODE discovery（`GET http://localhost:9980/hosting/discovery`）取 edit action urlsrc，拼 `WOPISrc=<wopiSrc>` 塞进 iframe。
+3. 用户编辑保存 → CODE 回调 `PUT /wopi/files/{fileId}/contents` → 覆盖 MinIO 里的 .pptx。
+
+### 说明与坑
+
+- **网络**：浏览器要能访问 CODE；CODE 要能访问 `WOPI_HOST`（GetFile/PutFile 是 CODE 服务端发起的）。
+- **安全**：access_token 由 `WOPI_SECRET` HMAC 签名、短时过期、绑定 fileId+user，别把 MinIO 凭据暴露给 CODE。
+- **锁/版本**：锁与版本号均为内存态（单进程），多人协作编辑依赖 LOCK/UNLOCK；重启后丢失。
+- **保真度**：Collabora 编辑真实 .pptx，但与 PowerPoint 非 100% 一致；ppt-master 生成的复杂母版/SVG 可能走样。
+- **两套编辑模型**：Collabora 直接改 .pptx 二进制，与现有 fabric→`/regenerate_ppt` 的「重新生成」不能混用，选一条当主路径。
 
 ## 回调
 
