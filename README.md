@@ -102,6 +102,7 @@ pip install -r requirements.txt
 | `/ppt/open_edit` | POST | 签发 WOPI access_token，返回在线编辑入口（fileId/accessToken/wopiSrc） | 真实 |
 | `/wopi/files/{fileId}` | GET/POST | WOPI host：CheckFileInfo / 锁操作（LOCK/UNLOCK/REFRESH_LOCK/GET_LOCK） | 真实 |
 | `/wopi/files/{fileId}/contents` | GET/POST | WOPI host：GetFile / PutFile | 真实 |
+| `/ppt/notes` | POST | 提取 .pptx 每页 speaker notes（编辑后重渲染预览时精确对应备注） | 真实 |
 | `/{inter_name:path}` | GET | 通用 GET 兜底 | 桩 |
 
 ## 端口说明
@@ -133,27 +134,33 @@ Java 侧 `application-local.yaml` 里各接口指向了多个端口（6001/60013
 ### 本地跑通（`ssl.enable=false`）
 
 ```bash
-docker run -d --name code -p 9980:9980 \
-  -e "username=admin" -e "password=xxx" \
-  -e "extra_params=--o:ssl.enable=false --o:ssl.termination=true" \
-  --restart always collabora/code
+docker run -t -d -p 9980:9980 \
+  -e 'aliasgroup1=http://192.168.1.4:60013' \
+  -e 'username=admin' -e 'password=xxx' \
+  -e 'extra_params=--o:ssl.enable=false' \
+  --restart always --cap-add MKNOD \
+  --name collabora-code collabora/code
 ```
 
-启动本系统时设置（Docker 内的 CODE 访问宿主 macOS）：
+启动本系统时设置（`WOPI_HOST` 要填 CODE 容器能访问到本系统的地址，即宿主局域网 IP，且与 `aliasgroup1` 一致）：
 
 ```bash
-WOPI_HOST=http://host.docker.internal:60013 uvicorn app:app --host 0.0.0.0 --port 60013
+WOPI_HOST=http://192.168.1.4:60013 .venv/bin/uvicorn app:app --host 0.0.0.0 --port 60013
 ```
 
-### 编辑流程
+### 编辑流程（跨 3 个项目）
 
-1. 前端调用 `POST /ppt/open_edit`，传入 `{"pptUrl": "<MinIO key>", "user": "..."}`，拿到 `accessToken` 和 `wopiSrc`。
-2. 用 CODE discovery（`GET http://localhost:9980/hosting/discovery`）取 edit action urlsrc，拼 `WOPISrc=<wopiSrc>` 塞进 iframe。
-3. 用户编辑保存 → CODE 回调 `PUT /wopi/files/{fileId}/contents` → 覆盖 MinIO 里的 .pptx。
+1. 前端「编辑」→ Java `/aiDhPpt/open_edit`（传 `pptId`）→ Java 查 `pptUrl` → 本系统 `POST /ppt/open_edit` 返回 `wopiSrc`。
+2. 前端拼 CODE 编辑地址（`http://localhost:9980/browser/<hash>/cool.html?WOPISrc=...`）塞 iframe。
+3. 编辑保存 → CODE 回调 `PUT /wopi/files/{fileId}/contents` → 覆盖 MinIO 里的 .pptx。
+4. 退出编辑 → 前端调 Java `/aiDhPpt/render_preview` → Java 重渲染预览图 + 调本系统 `POST /ppt/notes` 提取每页 speaker notes → 回写。
 
 ### 说明与坑
 
-- **网络**：浏览器要能访问 CODE；CODE 要能访问 `WOPI_HOST`（GetFile/PutFile 是 CODE 服务端发起的）。
+- **aliasgroup1 端口要写字面量**：`http://192.168.1.4:60013`，不能写 `http://192.168.1.4:.*`（CODE 会把端口当数字解析，`.*` 解析失败会丢弃整条 alias）。
+- **只关 ssl.enable**：不要加 `--o:ssl.termination=true`（它会让 discovery 广告 https 但容器只跑 http，浏览器报 `Failed to fetch`/白屏）。
+- **CODE 未开 CORS**：浏览器不能跨域 fetch CODE 的 `/hosting/discovery`，所以前端把 edit 地址（含构建号 hash）硬编码，别走 discovery fetch。
+- **网络**：浏览器要能访问 CODE；CODE 要能访问 `WOPI_HOST`（GetFile/PutFile 是 CODE 服务端发起的）。容器内 `localhost` 指向容器自己，不是宿主。
 - **安全**：access_token 由 `WOPI_SECRET` HMAC 签名、短时过期、绑定 fileId+user，别把 MinIO 凭据暴露给 CODE。
 - **锁/版本**：锁与版本号均为内存态（单进程），多人协作编辑依赖 LOCK/UNLOCK；重启后丢失。
 - **保真度**：Collabora 编辑真实 .pptx，但与 PowerPoint 非 100% 一致；ppt-master 生成的复杂母版/SVG 可能走样。
