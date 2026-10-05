@@ -9,6 +9,7 @@
 import io
 import logging
 import os
+import re
 import subprocess
 import tempfile
 
@@ -147,7 +148,8 @@ def _build_ass(captions: list, font_size: int, font_color: str) -> str:
     lines = [header]
     for cap in captions or []:
         text = str(cap.get("text", "") or "").strip()
-        text = text.replace("\n", " ").replace("\r", " ")  # 合并为单行，避免多行一起滚动
+        # 合并为单行：所有空白（含 Unicode 分隔符  /  等）与 ASS 换行转义 \N、\n 都替换为空格
+        text = re.sub(r"\s+", " ", text).replace("\\N", " ").replace("\\n", " ")
         if not text:
             continue
         start = int(cap.get("start", 0) or 0)
@@ -157,8 +159,8 @@ def _build_ass(captions: list, font_size: int, font_color: str) -> str:
         width = _estimate_text_width(text, font_size)
         text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
         if width > max_width:
-            # 跑马灯：整段文字从右侧滚入，滚动距离=文本宽，速度与朗读时长匹配
-            move_end = right - int(width)
+            # 跑马灯：整段文字从右侧滚入；滚动距离=文本宽×0.5，速度约为朗读速度的一半
+            move_end = right - int(width * 0.5)
             text = (
                 f"{{\\clip({left},0,{right},{playres_y})"
                 f"\\move({right},{y},{move_end},{y})}}{text}"
