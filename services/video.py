@@ -147,6 +147,7 @@ def _build_ass(captions: list, font_size: int, font_color: str) -> str:
     lines = [header]
     for cap in captions or []:
         text = str(cap.get("text", "") or "").strip()
+        text = text.replace("\n", " ").replace("\r", " ")  # 合并为单行，避免多行一起滚动
         if not text:
             continue
         start = int(cap.get("start", 0) or 0)
