@@ -123,6 +123,7 @@ Java 侧 `application-local.yaml` 里各接口指向了多个端口（6001/60013
   - `wav2lip`（默认，CPU）：克隆 [Wav2Lip](https://github.com/Rudrabha/Wav2Lip) 仓库并下载权重，配置 `WAV2LIP_HOME`。
   - `musetalk`（需 GPU）：部署 MuseTalk 推理服务，配置 `MUSETALK_API`。
   - 未接入时也可走 `wav2lip.change_video_passthrough`（只合音轨，不生成口型），用于跑通流程。
+- **声音合成 / 声音复刻** `GPT_SOVITS_API`：部署 GPT-SoVITS 的 `api_v2.py`（端口 9880，zero-shot TTS，权重见 `GPT_SoVITS/configs/tts_infer.yaml`）；未接入时 `/tts` 回退 edge-tts（占位）。
 - **文案/PPT 生成**：配置 `LLM_API_KEY`（OpenAI 兼容）。
 - **ppt-master 引擎** `/generate_ppt_master`：复用 `LLM_API_KEY`（同一网关，Anthropic `/v1/messages`）；引擎已 vendor 到 `skills/ppt-master/`，依赖见 `skills/ppt-master/requirements.txt`。默认关闭（`PPT_MASTER_ENABLED=1` 开启）。内置命令白名单 + 路径沙箱（bash 只放行引擎脚本/只读命令，read/write 限引擎根目录内），但**非 OS 级沙箱**，仍不建议对公网开放。支持 topic-research（`web_search` DuckDuckGo + `web_fetch` 复用 `web_to_md.py`，无 source 时联网补事实缺口）。
 - **PPT 转图片** `/ppttoimage`：需 LibreOffice + PDF 转图片（当前为桩）。
@@ -171,7 +172,7 @@ WOPI_HOST=http://192.168.1.4:60013 .venv/bin/uvicorn app:app --host 0.0.0.0 --po
 Python 处理完成后会回调 Java digital-server：
 
 - `POST {JAVA_SERVER}/digital-api/system/voiceManager/updateVoice`（训练完成，voiceStatus=2）
-- `POST {JAVA_SERVER}/digital-api/system/voiceManager/updateVoiceBypython`（克隆完成，voiceStatus=4）
+- `POST {JAVA_SERVER}/digital-api/system/voiceManager/updateVoiceBypython`（克隆完成，voiceStatus=4，携带 `length` 音频时长毫秒）
 - `POST {JAVA_SERVER}/digital-api/system/aiDhHuman/callBackAiDhHuman`（抠图完成/失败，status=3/4）
 - `POST {JAVA_SERVER}/digital-api/system/aiDhHumanVideo/updateRecordVideo`（视频处理各步骤，execStatus=1/2）
 
