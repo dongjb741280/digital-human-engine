@@ -126,12 +126,13 @@ async def tts(request: Request):
         logger.exception("tts error")
         return {"code": "9999", "msg": str(e)}
 
-    # 回调 Java：最终状态 4，携带 sample 路径
+    # 回调 Java：最终状态 4，携带 sample 路径与时长（毫秒）
     callback_to_java(JAVA_UPDATE_VOICE_FINAL, {
         "voiceId": voice_id,
         "voiceStatus": "4",
         "voiceSampleUrl": object_key,
         "voiceType": voice_type,
+        "length": voice.audio_duration_ms(audio),
     })
     return {"code": "0000", "outputFile": object_key}
 

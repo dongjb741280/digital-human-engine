@@ -117,6 +117,19 @@ async def _edge_tts_fallback(text: str) -> bytes:
         os.unlink(tmp.name)
 
 
+def audio_duration_ms(audio_bytes: bytes) -> int:
+    """返回音频时长（毫秒），兼容 wav/mp3；解析失败返回 0。"""
+    try:
+        container = av.open(io.BytesIO(audio_bytes))
+        duration_us = container.duration  # AV_TIME_BASE，微秒
+        container.close()
+        if duration_us:
+            return int(duration_us / 1000)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("音频时长解析失败: %s", e)
+    return 0
+
+
 def _decode_audio_mono(audio_bytes: bytes, target_sr: int = 16000):
     """用 PyAV 解码为 target_sr 单声道 float32 数组（-1~1）。失败返回 (None, target_sr)。"""
     try:
