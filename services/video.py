@@ -111,13 +111,23 @@ def add_captions(input_key: str, output_key: str, captions: list, font_size: int
             os.unlink(ass.name)
 
 
+def _estimate_text_width(text: str, font_size: int) -> float:
+    """估算字幕文本宽度（像素）：CJK 按 1 个 font_size，其余按约 0.55 个。"""
+    w = 0.0
+    for ch in text:
+        w += font_size if ord(ch) > 0x2E80 else font_size * 0.55
+    return w
+
+
 def _build_ass(captions: list, font_size: int, font_color: str) -> str:
     primary = _to_ass_color(font_color)
+    playres_x, playres_y = 1920, 1080
+    margin_v = 40  # 与 Style 的 MarginV 一致
     header = (
         "[Script Info]\n"
         "ScriptType: v4.00+\n"
-        "PlayResX: 1920\n"
-        "PlayResY: 1080\n"
+        f"PlayResX: {playres_x}\n"
+        f"PlayResY: {playres_y}\n"
         "WrapStyle: 0\n"
         "ScaledBorderAndShadow: yes\n\n"
         "[V4+ Styles]\n"
@@ -125,10 +135,15 @@ def _build_ass(captions: list, font_size: int, font_color: str) -> str:
         "Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding\n"
         f"Style: Default,PingFang SC,{font_size},{primary},&H000000FF,&H00000000,&H00000000,"
-        f"0,0,0,0,100,100,0,0,1,1,0,2,60,60,40,1\n\n"
+        f"0,0,0,0,100,100,0,0,1,1,0,2,60,60,{margin_v},1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
+    # 字幕显示区限制为屏宽 80%；超长文本在该区域内从右向左滚动
+    max_width = int(playres_x * 0.8)
+    left = (playres_x - max_width) // 2
+    right = left + max_width
+    y = playres_y - margin_v - font_size
     lines = [header]
     for cap in captions or []:
         text = str(cap.get("text", "") or "").strip()
@@ -138,7 +153,14 @@ def _build_ass(captions: list, font_size: int, font_color: str) -> str:
         end = int(cap.get("end", start + 3000) or start + 3000)
         if end <= start:
             end = start + 1000
+        width = _estimate_text_width(text, font_size)
         text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
+        if width > max_width:
+            move_end = left - int(width)
+            text = (
+                f"{{\\clip({left},0,{right},{playres_y})"
+                f"\\move({right},{y},{move_end},{y})}}{text}"
+            )
         lines.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Default,,0,0,0,,{text}")
     return "\n".join(lines)
 
