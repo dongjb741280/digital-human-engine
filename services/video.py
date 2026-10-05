@@ -157,11 +157,11 @@ def _build_ass(captions: list, font_size: int, font_color: str) -> str:
         width = _estimate_text_width(text, font_size)
         text = text.replace("\\", "\\\\").replace("{", "\\{").replace("}", "\\}")
         if width > max_width:
-            # 只滚动「超出部分」：文本从头显示到尾，滚动速度与朗读时长匹配
-            overflow = int(width) - max_width
+            # 跑马灯：整段文字从右侧依次滚入、从左侧滚出（第一个字先进入）
+            move_end = left - int(width)
             text = (
                 f"{{\\clip({left},0,{right},{playres_y})"
-                f"\\move({left},{y},{left - overflow},{y})}}{text}"
+                f"\\move({right},{y},{move_end},{y})}}{text}"
             )
         lines.append(f"Dialogue: 0,{_fmt_ass_time(start)},{_fmt_ass_time(end)},Default,,0,0,0,,{text}")
     return "\n".join(lines)
