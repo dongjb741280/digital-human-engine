@@ -22,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 
 import config
-from services import llm, minio_util, musetalk, ppt, ppt_master, voice, video, wav2lip, wopi
+from services import lipsync, llm, minio_util, musetalk, ppt, ppt_master, tools, voice, video, wav2lip, wopi
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -391,15 +391,6 @@ async def get_first_frame(request: Request):
         return {"code": "9999", "msg": str(e)}
 
 
-def _lipsync_change_video(video_key: str, audio_key: str, output_key: str) -> str:
-    """按 LIPSYNC_MODEL 调度口型合成：wav2lip（默认）/ musetalk / passthrough（快速占位）。"""
-    if config.LIPSYNC_MODEL == "musetalk":
-        return musetalk.change_video(video_key, audio_key, output_key)
-    if config.LIPSYNC_MODEL == "passthrough":
-        return wav2lip.change_video_passthrough(video_key, audio_key, output_key)
-    return wav2lip.change_video(video_key, audio_key, output_key)
-
-
 @app.post("/ai/changeVideo")
 async def change_video(request: Request):
     """语音合成数字人视频（口型合成，LIPSYNC_MODEL 可配 wav2lip/musetalk）。"""
@@ -414,7 +405,7 @@ async def change_video(request: Request):
     output_name = body.get("output_vid_name", f"{batch_pptid_pagenum}.mp4")
     output_key = f"{result_dir}/{output_name}" if result_dir else output_name
     try:
-        key = await asyncio.to_thread(_lipsync_change_video, video_key, audio_key, output_key)
+        key = await asyncio.to_thread(lipsync.change_video, video_key, audio_key, output_key)
         callback_to_java(JAVA_UPDATE_RECORD_VIDEO, {
             "video_type": "1", "execStatus": "1", "batchPptidPagenum": batch_pptid_pagenum, "voiceAddVideoOutPutDir": key,
         })
@@ -435,7 +426,7 @@ async def change_video_split(request: Request):
     audio_key = body.get("audio_path") or body.get("ppt_voice_url", "")
     output_key = body.get("output_path") or body.get("output_vid_name", "")
     try:
-        key = await asyncio.to_thread(_lipsync_change_video, video_key, audio_key, output_key)
+        key = await asyncio.to_thread(lipsync.change_video, video_key, audio_key, output_key)
         return {"code": "0000", "outputFile": key}
     except Exception as e:  # noqa: BLE001
         logger.exception("changeVideoSplit error")
@@ -885,6 +876,26 @@ async def wopi_check_file_info(file_id: str, access_token: str = ""):
         "SupportsDeleteFile": False,
         "Version": wopi.current_version(file_id),
     }
+
+
+@app.get("/tools")
+async def tools_list():
+    """工具箱：列出所有可用工具及其参数。"""
+    return {"code": "0000", "data": tools.list_tools()}
+
+
+@app.post("/tools/run")
+async def tools_run(request: Request):
+    """工具箱：通用调度执行一个工具。body: {"tool": 工具名, "params": {...}}"""
+    body = await request.json()
+    name = body.get("tool", body.get("name", ""))
+    params = body.get("params", {})
+    try:
+        result = await asyncio.to_thread(tools.run_tool, name, params)
+        return {"code": "0000", "data": result}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("tool run error: %s", name)
+        return {"code": "9999", "msg": str(e)}
 
 
 @app.get("/{inter_name:path}")

@@ -25,6 +25,9 @@ ASR_MODEL = os.getenv("ASR_MODEL", "medium")
 # edge-tts 音色（默认中文女声；仅作为 GPT-SoVITS 未接入时的回退）
 TTS_VOICE = os.getenv("TTS_VOICE", "zh-CN-XiaoxiaoNeural")
 
+# TTS 模型（声音合成）：gpt_sovits（默认，zero-shot 声音克隆）| edge_tts（占位回退）
+TTS_MODEL = os.getenv("TTS_MODEL", "gpt_sovits")
+
 # 抠像模型（rembg 的模型名：u2net / isnet-general-use / birefnet-general）
 MATTING_MODEL = os.getenv("MATTING_MODEL", "u2net")
 

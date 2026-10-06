@@ -44,18 +44,50 @@ def _get_opencc():
     return _opencc
 
 
-def asr(audio_bytes: bytes) -> str:
-    """语音转文字。audio_bytes 为音频文件内容。"""
+def asr_segments(audio_bytes: bytes) -> list:
+    """语音转文字，返回带时间戳的片段 [{text, start, end}]（毫秒）。
+
+    faster-whisper 每个 segment 天然带 start/end，可直接喂给 add_captions 生成字幕。
+    """
     tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
     tmp.write(audio_bytes)
     tmp.close()
     try:
         model = _get_whisper()
         segments, _info = model.transcribe(tmp.name, language="zh")
-        text = "".join(seg.text for seg in segments).strip()
-        return _get_opencc().convert(text)
+        cc = _get_opencc()
+        result = []
+        for seg in segments:
+            text = cc.convert(seg.text.strip())
+            if text:
+                result.append({"text": text, "start": int(seg.start * 1000), "end": int(seg.end * 1000)})
+        return result
     finally:
         os.unlink(tmp.name)
+
+
+def asr(audio_bytes: bytes) -> str:
+    """语音转文字。audio_bytes 为音频文件内容（纯文本，拼接所有片段）。"""
+    return "".join(s["text"] for s in asr_segments(audio_bytes)).strip()
+
+
+def srt_from_segments(segments: list) -> str:
+    """把 [{text, start, end}]（毫秒）组装成 SRT 字幕文本。"""
+    lines = []
+    for i, seg in enumerate(segments, 1):
+        lines.append(str(i))
+        lines.append(f"{_fmt_srt_time(seg['start'])} --> {_fmt_srt_time(seg['end'])}")
+        lines.append(seg["text"])
+        lines.append("")
+    return "\n".join(lines)
+
+
+def _fmt_srt_time(ms: int) -> str:
+    ms = max(int(ms), 0)
+    h, rem = divmod(ms, 3600000)
+    m, rem = divmod(rem, 60000)
+    s, milli = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{milli:03d}"
 
 
 async def _edge_tts(text: str, voice: str, out_path: str) -> None:
@@ -63,15 +95,20 @@ async def _edge_tts(text: str, voice: str, out_path: str) -> None:
     await communicate.save(out_path)
 
 
-async def tts(params: dict) -> bytes:
-    """调用 GPT-SoVITS 推理接口合成语音，返回音频字节。
+# TTS provider 注册表：模型名 -> async 合成函数(params) -> bytes
+TTS_PROVIDERS = {}
 
-    Java callVoiceClone 透传的参数里既有 api_v2.py 需要的（text、text_lang、
-    ref_audio_path、prompt_text、prompt_lang、speed_factor 等），也有 Java 侧的
-    （voiceId、voice_type、sovits_weights_path、gpt_weights_path、bucket_name、
-    streaming_mode）。这里做参数清洗，并把 MinIO 对象键的 ref_audio_path 下载成
-    GPT-SoVITS 可读的本地路径。GPT-SoVITS 不可用时回退 edge-tts（仅本地占位）。
-    """
+
+def register_tts(name: str):
+    def deco(fn):
+        TTS_PROVIDERS[name] = fn
+        return fn
+    return deco
+
+
+@register_tts("gpt_sovits")
+async def _gpt_sovits_tts(params: dict) -> bytes:
+    """GPT-SoVITS zero-shot 合成。ref_audio_path 为 MinIO 键时先下载到本地。"""
     # 只保留 api_v2.py 认识且类型匹配的参数
     gs_params = {
         k: params[k]
@@ -97,24 +134,38 @@ async def tts(params: dict) -> bytes:
             resp = await client.get(url, params=gs_params)
             resp.raise_for_status()
             return resp.content
-    except Exception as e:  # noqa: BLE001
-        logger.warning("GPT-SoVITS 推理失败，回退 edge-tts：%s", e)
-        return await _edge_tts_fallback(params.get("text", ""))
     finally:
         if tmp_ref is not None and os.path.exists(tmp_ref.name):
             os.unlink(tmp_ref.name)
 
 
-async def _edge_tts_fallback(text: str) -> bytes:
-    """edge-tts 占位实现，GPT-SoVITS 未接入时使用。"""
+@register_tts("edge_tts")
+async def _edge_tts_tts(params: dict) -> bytes:
+    """edge-tts 占位合成（GPT-SoVITS 未接入时的回退）。"""
     tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
     tmp.close()
     try:
-        await _edge_tts(text, config.TTS_VOICE, tmp.name)
+        await _edge_tts(params.get("text", ""), config.TTS_VOICE, tmp.name)
         with open(tmp.name, "rb") as f:
             return f.read()
     finally:
         os.unlink(tmp.name)
+
+
+async def tts(params: dict) -> bytes:
+    """按 TTS_MODEL 选择合成引擎；非 edge_tts 失败时回退 edge_tts。"""
+    primary = config.TTS_MODEL
+    provider = TTS_PROVIDERS.get(primary)
+    if provider is None:
+        logger.warning("未知 TTS 模型 %s，回退 edge_tts", primary)
+        provider = TTS_PROVIDERS["edge_tts"]
+    try:
+        return await provider(params)
+    except Exception as e:  # noqa: BLE001
+        if primary == "edge_tts":
+            raise
+        logger.warning("%s 合成失败，回退 edge_tts：%s", primary, e)
+        return await TTS_PROVIDERS["edge_tts"](params)
 
 
 def audio_duration_ms(audio_bytes: bytes) -> int:
